@@ -388,6 +388,5 @@ print(guide.successful_models)
 
 
 # %% ----------------------------------------------------
-# noinspection PyTypeChecker
 check_cov(models=models, weight_vec=gl.data.weight_vec, path_prefix=gl.logger.prefix_db(),
           allowed_basis_dims=ALLOWED_BASIS_DIMS)
