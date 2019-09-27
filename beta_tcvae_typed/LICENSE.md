@@ -1,9 +1,9 @@
-Some subfolders have different copyrights but they are also MIT
+Code by Ricky Tian Qi Chen was forked from https://github.com/rtqichen/beta-tcvae
 
 MIT License
 =====================
 
-Copyright (c) 2019 Peter Zagubisalo
+Copyright (c) 2018 Ricky Tian Qi Chen, 2019 Peter Zagubisalo
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

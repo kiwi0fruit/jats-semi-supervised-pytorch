@@ -1,39 +1,60 @@
-# Semi-supervised PyTorch
+Applying VAE and DGM families to JATS database in PyTorch
+=========================================================
 
-A PyTorch-based package containing useful models for modern deep semi-supervised learning and deep generative models. Want to jump right into it? Look into the [notebooks](examples/notebooks).
+To run:
 
-### Latest additions
+* [Install work environment via conda](https://github.com/kiwi0fruit/pyappshare/tree/master/template_env)
+* [Setup mypy and pylint linters in Visual Studio Code and PyCharm](./README_SETUP_LINTERS.md)
+* Open this folder in Visual Studio Code, open and run "main.py" in Data Science mode via
+  [Python extension for Visual Studio Code](https://marketplace.visualstudio.com/items?itemName=ms-python.python).
 
-*2018.04.17* - The Gumbel softmax notebook has been added to show how
-you can use discrete latent variables in VAEs.
-*2018.02.28* - The β-VAE notebook was added to show how VAEs can learn disentangled representations.
+This would have worked if I published SOLTI and BOLTI databases together with this repo. But currently it's not possible.
+But if you are interested researcher you can contact me here on GitHub and [Andrew Khizhnyak](https://vk.com/hizhnjak) for permission.
 
-## What is semi-supervised learning?
+I forked some repos, made them work together, fixed bugs when necessary and added types annotations:
 
-Semi-supervised learning tries to bridge the gap between supervised and unsupervised learning by learning from both
-labelled and unlabelled data.
+* [beta-tcvae](https://github.com/rtqichen/beta-tcvae)
+* [normalizing-flows](https://github.com/tonyduan/normalizing-flows) and [BNAF](https://github.com/nicola-decao/BNAF)
+* [semi-supervised-pytorch](https://github.com/wohlert/semi-supervised-pytorch)
 
-Semi-supervised learning can typically be applied to areas where data is easy to get a hold of, but labelling is expensive.
-Normally, one would either use an unsupervised method, or just the few labelled examples - both of which would be
-likely to yield bad results.
 
-The current state-of-the-art method in semi-supervised learning achieves an accuracy of over 99% on the MNIST dataset using just **10 labelled examples per class**.
+Info
+----------------------------------------------
 
-## Conditional generation
+This repo contains code that is my playground for applying VAE family models to [JATS](https://github.com/kiwi0fruit/jats) SOLTI-160 database
+by Andrew Khizhnyak based on survey by Victor Talanov.
 
-Most semi-supervised models simultaneously train an inference network and a generator network. This means that it is
-not only possible to query this models for classification, but also to generate new data from trained model.
-By seperating label information, one can generate a new sample with the given digit as shown in the image below from
-Kingma 2014.
+I started with [VAE](https://arxiv.org/abs/1312.6114), then tried [MMD-AE](https://arxiv.org/abs/1706.02262),
+then [Beta TC VAE](https://arxiv.org/abs/1802.04942). I also used [PCA and FA](./vae/linear_component_analyzer.py) for comparison.
 
-![Conditional generation of samples](examples/images/conditional.png)
+Research started with hope to create a latent variables model that would be better than PCA and FA somehow.
 
-## Implemented models and methods:
+In search for better NLL (given by BCE) of the reconstructed data than in VAE and Beta TC VAE I tried MMD-AE - as even FA gave much better NLL that VAE
+(I'm aware that FA not a generative model so the comparison is not fare as with FA we don't have NELBO for proper comparison. But still).
+MMD-AE gave nice NLL comparable with FA but gave random latents. Beta TC VAE gave more stable latents but with a cost of high NLL.
+First trainig with Beta TC VAE then training the same model with MMD-AE allowed to train some models then pick the most "common" one.
+This way I got resemblance of latents stability and nice NLL (with the same z dim the same as in FA).
+Still the results were not that different from FA results so I tried [ADGM](https://arxiv.org/abs/1602.05473).
 
-* [Variational Autoencoder (Kingma 2013)](https://arxiv.org/abs/1312.6114)
-* [Importance Weighted Autoencoders (Burda 2015)](https://arxiv.org/abs/1509.00519)
-* [Variational Inference with Normalizing Flows (Rezende & Mohamed 2015)](https://arxiv.org/abs/1505.05770)
-* [Semi-supervised Learning with Deep Generative Models (Kingma 2014)](https://arxiv.org/abs/1406.5298)
-* [Auxiliary Deep Generative Models (Maaløe 2016)](https://arxiv.org/abs/1602.05473)
-* [Ladder Variational Autoencoders (Sønderby 2016)](https://arxiv.org/abs/1602.02282)
-* [β-VAE (Higgins 2017)](https://openreview.net/forum?id=Sy2fzU9gl)
+DGM family fits perfectly as SOLTI database has "types" assigned to each profile via two ways (self providing type in the survey + result of the survey).
+As both are not enough reliable in my opinion it's better to take only types than coinside. Hence we have partially labelled database.
+This gave more interesting results in my opinion but I'm still in the process of investigating them.
+
+I split the database into learn part and test part as 9:1. Database contains 6406 profiles with 162 questions each.
+
+Worth mentioning that I decided to have a weighted random sampler that would sample some profiles much more frequently.
+I decided to use types results of the test for this (together with sex). Presumably it's necessary as some types
+like to take psychological surveys much more than other types.
+
+There are 3 straghtforard ways to get labels: 16 types, 8 dominant functions, 4 JATS temperaments. I tried all three and dumped raw results to
+[output](./output) folder. There are some svg stats there (see [labels colors meanings](./output/types_colors.svg) for details).
+
+Worth mentioning classifiation accuracy that ADGM gives:
+
+* 16 Types: 95% for learn data, 80% for test data,
+* 8 Dominant functions: 95% for learn data, 85% for test data,
+* 4 JATS temperaments: 92% for leard data, 83% for test data.
+
+NLL is still worse than in FA but not much. And latents are quite different as the model uses labels.
+
+At some point I also played with normalizing flows added to VAE but abandonded it.

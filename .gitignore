@@ -1,9 +1,7 @@
-__pycache__
-raw
-processed
-.idea
-.DS_Store
-.ipynb_checkpoints
-mldata
-.pt
-.log
+stubs/
+__pycache__/
+.vscode/
+.mypy_cache/
+.idea/
+.pylintrc
+mypy.ini

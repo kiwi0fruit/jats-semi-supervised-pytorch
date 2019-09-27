@@ -1,9 +1,8 @@
-Some subfolders have different copyrights but they are also MIT
-
 MIT License
 =====================
 
-Copyright (c) 2019 Peter Zagubisalo
+Copyright (c) 2019 Conor Durkan, Artur Bekasov, Iain Murray, George Papamakarios,
+2017 Jesper Wohlert, 2019 Nicola De Cao, 2019 Tony Duan, 2019 Peter Zagubisalo
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
