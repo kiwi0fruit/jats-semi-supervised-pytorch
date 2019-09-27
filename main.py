@@ -104,8 +104,8 @@ mmd = MMDLoss(batch_size=BATCH_SIZE)
 nll = BernoulliLoss()
 loader.upd_nll_state(nll)
 trim: Opt[TrimLoss]
-trim = TrimLoss()
-# trim = None
+# trim = TrimLoss()
+trim = None
 
 do3 = Do1(
     id=3, len=1, formula=FORMULA,
