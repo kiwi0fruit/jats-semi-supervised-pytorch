@@ -54,6 +54,7 @@ Worth mentioning classifiation accuracy that ADGM gives:
 * 16 Types: 95% for learn data, 80% for test data,
 * 8 Dominant functions: 95% for learn data, 85% for test data,
 * 4 JATS temperaments: 92% for leard data, 83% for test data.
+* **TODO**: make learn and lest coniside!
 
 NLL is still worse than in FA but not much. And latents are quite different as the model uses labels.
 
