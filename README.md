@@ -65,9 +65,9 @@ At some point I also played with normalizing flows added to VAE but abandonded i
 
 Second unfinished model (current)
 ----------------------------------------------
-After the first attempt I switched completely to the beta-tc-vae models. Andrew Khizhnyak provided me with additional \~4000 data points total of \~10000 now.
+After the first attempt I switched completely to the Beta-TC-VAE models. Andrew Khizhnyak provided me with additional \~4000 data points total of \~10000 now.
 
 After reading papers [Disentangling Disentanglement in Variational Autoencoders](https://arxiv.org/abs/1812.02833) and [Variational Autoencoders Pursue PCA Directions (by Accident)](https://arxiv.org/abs/1812.06775) I 
-assumed that classical VAEs do not guarantee the disentanglement (I sometimes got VAE-trained models with linearly correlated latents when NELBO had as nice values as in models without correlated latents. Hence no guarantee. That behaviour was mentioned in the parer) but Beta-VAE and Beta-TC-VAE (beta total correlation VAE) either do not converge to the same values of NLL or do it too slow.
+assumed that classical VAEs do not guarantee the disentanglement (I sometimes got VAE-trained models with linearly correlated latents when NELBO had as nice values as in models without correlated latents. Hence no guarantee. This behaviour was mentioned in the parer) but Beta-VAE and Beta-TC-VAE (beta total correlation VAE) either do not converge to the same values of NLL or do it too slow.
 
 Hence I implemented hybrid Beta-TC-VAE model that consists of two Beta-TC-VAEs that share decoders and encoding of mean values. But sigma values are encoded partially separately. The First model gives NELBO1 with high beta value, the second one gives NELBO2 with low beta value. Final Error is weighted sum of NELBO1 and NELBO2. On first etape NELBO2 has more weight but then NELBO1 has more weight. This way I got the model that always converges to NLL values now worse than in Factor Analysis. And has low total correlation value estimates that always give low latents linear correlations (as an easy control parameter).
