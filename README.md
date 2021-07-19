@@ -8,7 +8,7 @@ To run:
 * Open this folder in Visual Studio Code, open and run "main.py" in Data Science mode via
   [Python extension for Visual Studio Code](https://marketplace.visualstudio.com/items?itemName=ms-python.python).
 
-This would have worked if I published SOLTI and BOLTI databases together with this repo. But currently it's not possible.
+This would have worked if I published SOLTI database together with this repo. But currently it's not possible.
 But if you are interested researcher you can contact me here on GitHub and [Andrew Khizhnyak](https://vk.com/hizhnjak) for permission.
 
 I forked some repos, made them work together, fixed bugs when necessary and added types annotations:
@@ -18,7 +18,7 @@ I forked some repos, made them work together, fixed bugs when necessary and adde
 * [semi-supervised-pytorch](https://github.com/wohlert/semi-supervised-pytorch)
 
 
-Info
+First models (outdated)
 ----------------------------------------------
 
 This repo contains code that is my playground for applying VAE family models to [JATS](https://github.com/kiwi0fruit/jats) SOLTI-160 database
@@ -59,3 +59,8 @@ Worth mentioning classifiation accuracy that ADGM gives:
 NLL is still worse than in FA but not much. And latents are quite different as the model uses labels.
 
 At some point I also played with normalizing flows added to VAE but abandonded it.
+
+
+Second unfinished model (current)
+----------------------------------------------
+After the first attempt I switched completely to the beta-tc-vae models. Andrew Khizhnyak provided me with additional 4000 data points total of ~10000 now.
