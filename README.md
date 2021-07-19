@@ -21,6 +21,8 @@ I forked some repos, made them work together, fixed bugs when necessary and adde
 First models (outdated)
 ----------------------------------------------
 
+*Repo with code for this version ia available [here](https://github.com/kiwi0fruit/jats-semi-supervised-pytorch/tree/0.1).*
+
 This repo contains code that is my playground for applying VAE family models to [JATS](https://github.com/kiwi0fruit/jats) SOLTI-160 database
 by Andrew Khizhnyak based on survey by Victor Talanov.
 
