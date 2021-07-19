@@ -30,7 +30,7 @@ then [Beta TC VAE](https://arxiv.org/abs/1802.04942). I also used [PCA and FA](.
 Research started with hope to create a latent variables model that would be better than PCA and FA somehow.
 
 In search for better NLL (given by BCE) of the reconstructed data than in VAE and Beta TC VAE I tried MMD-AE - as even FA gave much better NLL that VAE
-(I'm aware that FA not a generative model so the comparison is not fare as with FA we don't have NELBO for proper comparison. But still).
+(I'm aware that comparison via NLL only is not fare as with FA we don't have NELBO for proper comparison. But still...).
 MMD-AE gave nice NLL comparable with FA but gave random latents. Beta TC VAE gave more stable latents but with a cost of high NLL.
 First trainig with Beta TC VAE then training the same model with MMD-AE allowed to train some models then pick the most "common" one.
 This way I got resemblance of latents stability and nice NLL (with the same z dim the same as in FA).
