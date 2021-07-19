@@ -18,10 +18,10 @@ I forked some repos, made them work together, fixed bugs when necessary and adde
 * [semi-supervised-pytorch](https://github.com/wohlert/semi-supervised-pytorch)
 
 
-First models (outdated)
+First models (previous version)
 ----------------------------------------------
 
-*Repo with code for this version ia available [here](https://github.com/kiwi0fruit/jats-semi-supervised-pytorch/tree/0.1).*
+*Repo with code for this version is available [here](https://github.com/kiwi0fruit/jats-semi-supervised-pytorch/tree/0.1).*
 
 This repo contains code that is my playground for applying VAE family models to [JATS](https://github.com/kiwi0fruit/jats) SOLTI-160 database
 by Andrew Khizhnyak based on survey by Victor Talanov.
@@ -56,14 +56,14 @@ Worth mentioning classifiation accuracy that ADGM gives:
 * 16 Types: 95% for learn data, 80% for test data,
 * 8 Dominant functions: 95% for learn data, 85% for test data,
 * 4 JATS temperaments: 92% for leard data, 83% for test data.
-* **TODO**: make learn and lest coniside.
+* TODO: make learn and lest coniside.
 
 NLL is still worse than in FA but not much. And latents are quite different as the model uses labels.
 
 At some point I also played with normalizing flows added to VAE but abandonded it.
 
 
-Second unfinished model (current)
+Second unfinished model (current version)
 ----------------------------------------------
 After the first attempt I switched completely to the Beta-TC-VAE models. Andrew Khizhnyak provided me with additional \~4000 data points total of \~10000 now.
 
