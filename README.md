@@ -65,7 +65,7 @@ At some point I also played with normalizing flows added to VAE but abandonded i
 
 Second unfinished model (current version)
 ----------------------------------------------
-After the first attempt I switched completely to the Beta-TC-VAE models. Andrew Khizhnyak provided me with additional \~4000 data points total of \~10000 now.
+After the first attempt I switched completely to the Beta-TC-VAE models. Andrew Khizhnyak provided me with additional \~4000 data points total of \~10000 now. I re-split the database into learn part and test part as 7:3.
 
 After reading papers [1 - Disentangling Disentanglement in Variational Autoencoders](https://arxiv.org/abs/1812.02833) and [2 - Variational Autoencoders Pursue PCA Directions (by Accident)](https://arxiv.org/abs/1812.06775) I 
 assumed that classical VAEs do not guarantee the disentanglement (I sometimes got VAE-trained models with linearly correlated latents when NELBO had as nice values as in models without correlated latents. Hence no guarantee. This behaviour was mentioned in the 1st parer) but Beta-VAE and Beta-TC-VAE (beta total correlation VAE) either do not converge to the same values of NLL or do it too slow.
