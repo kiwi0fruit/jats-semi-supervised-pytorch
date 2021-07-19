@@ -1,7 +1,7 @@
 from typing import Tuple
 from abc import abstractmethod
 from torch import Tensor
-from kiwi_bugfix_typechecker.nn import Module
+from torch.nn import Module
 
 
 XTupleYi = Tuple[Tensor, Tuple[Tensor, ...]]

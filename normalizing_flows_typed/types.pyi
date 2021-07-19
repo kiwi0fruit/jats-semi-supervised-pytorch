@@ -1,7 +1,7 @@
 from abc import abstractmethod
 from typing import Tuple
 from torch import Tensor
-from kiwi_bugfix_typechecker.nn import Module, Sequential
+from torch.nn import Module, Sequential
 
 
 class SequentialZToXY(Sequential):

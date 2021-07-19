@@ -5,7 +5,7 @@ from dataclasses import dataclass, asdict
 class BetaTC:
     mi__γ_tc__λ_dw: bool = False
     γ_tc__λ_dw: bool = False
-    kld__γmin1_tc: bool = False
+    λ_kld__γmin1_tc: bool = False
     # kld__γmin1_tc__λmin1_dw
 
     def __post_init__(self):

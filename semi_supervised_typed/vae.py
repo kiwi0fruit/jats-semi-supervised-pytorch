@@ -1,17 +1,16 @@
-from typing import Callable, Tuple, List, Type, Optional as Opt, Union, Sequence as Seq, NamedTuple
+from typing import Callable, Tuple, List, Type, Optional as Opt, Union, Sequence as Seq, NamedTuple, Dict
 import torch as tr
-from torch import Tensor
-from kiwi_bugfix_typechecker import func, nn
-from beta_tcvae_typed import BetaTCKLDLoss, Normal
-from normalizing_flows_typed.types import SequentialZToXY, ModuleZToXY
+from torch import Tensor, nn
+from torch.nn import functional as func
+from beta_tcvae_typed import XYDictStrZ, KLDLoss, PostInit
+from kiwi_bugfix_typechecker import test_assert
 
 from .layers import GaussianSample, GaussianMerge, GumbelSoftmax, BaseSample, ModuleXToXTupleYi, XTupleYi
-from .inference import log_gaussian, log_standard_gaussian
 from .vae_types import (RetLadderEncoder, BaseLadderEncoder, RetLadderDecoder, BaseLadderDecoder, ModuleXToX,
-                        ModuleXYToXY)
+                        ModuleXYToXYDictStrOptZ)
 
+test_assert()
 δ = 1e-8
-ZToXY = Union[SequentialZToXY, ModuleZToXY]
 
 
 class Act(NamedTuple):
@@ -24,35 +23,46 @@ class Perceptron(ModuleXToX):
     output_activation: Opt[Act]
     layers: List[nn.Linear]
 
-    def __init__(self, dims: Seq[int], activation_fn: Callable[[Tensor], Tensor]=tr.relu,
+    def __init__(self, dims: Seq[int], activation_fn: Callable[[Tensor], Tensor]=tr.selu,
                  output_activation: Opt[Callable[[Tensor], Tensor]]=None):
         super(Perceptron, self).__init__()
         self.dims = dims
         self.activation_fn = Act(activation_fn)
         self.output_activation = Act(output_activation) if (output_activation is not None) else None
-        # noinspection PyTypeChecker
-        self.layers = nn.ModuleList(list(map(lambda d: nn.Linear(*d), list(zip(dims, dims[1:])))))
+        self.layers = self.get_layers(dims)
 
-    def forward_(self, x: Tensor) -> Tensor:
+    @staticmethod
+    def get_layers(dims: Seq[int]) -> List[nn.Linear]:
+        # noinspection PyTypeChecker
+        return nn.ModuleList(list(map(  # type: ignore
+            lambda d: nn.Linear(*d), zip(dims, dims[1:])
+        )))
+
+    def forward_i(self, x: Tensor, layers: List[nn.Linear]) -> Tensor:
         h: Tensor
-        for i, layer in enumerate(self.layers):
+        for i, layer in enumerate(layers):
             h = layer.__call__(x)
-            if (i == len(self.layers) - 1) and (self.output_activation is not None):
-                h = self.output_activation.a(h)
-            else:
+            if i < len(layers) - 1:
                 h = self.activation_fn.a(h)
+            elif self.output_activation is not None:
+                h = self.output_activation.a(h)
             x = h
         return x
 
+    def forward_(self, x: Tensor) -> Tensor:
+        return self.forward_i(x, self.layers)
 
-class Encoder(ModuleXToXTupleYi):
+
+class Encoder(ModuleXToXTupleYi, PostInit):
     hidden: List[nn.Linear]
     activation_fn: Act
     sample: BaseSample
+    extras: Dict[str, Tensor]
+    dims: Tuple[int, Tuple[int, ...], int]
 
     def __init__(self, dims: Tuple[int, Tuple[int, ...], int],
                  sample_layer: Type[BaseSample]=GaussianSample,
-                 activation_fn: Callable[[Tensor], Tensor]=tr.relu):
+                 activation_fn: Callable[[Tensor], Tensor]=tr.selu):
         """
         Inference network
 
@@ -67,32 +77,44 @@ class Encoder(ModuleXToXTupleYi):
         :param sample_layer: subclass of the BaseSample
         """
         super(Encoder, self).__init__()
-
+        self.dims = dims
         x_dim, h_dim, z_dim = dims
-        neurons = [x_dim, *h_dim]
+        self.activation_fn = Act(activation_fn)
+        hidden, sample = self.get_hidden_and_sample(sample_layer, z_dim, x_dim, *h_dim)
+        self.hidden, self.sample = hidden, sample
+        self.extras = {}
+        self.__final_init__()
+
+    @staticmethod
+    def get_hidden_and_sample(sample_layer: Type[BaseSample], z_dim: int,
+                              *neurons: int) -> Tuple[List[nn.Linear], BaseSample]:
         linear_layers = [nn.Linear(neurons[i - 1], neurons[i]) for i in range(1, len(neurons))]
         # noinspection PyTypeChecker
-        self.hidden = nn.ModuleList(linear_layers)
-        self.activation_fn = Act(activation_fn)
-        self.sample = sample_layer(h_dim[-1], z_dim)
+        hidden: List[nn.Linear] = nn.ModuleList(linear_layers)  # type: ignore
+        sample = sample_layer(neurons[-1], z_dim)
+        return hidden, sample
 
-    def forward_(self, x: Tensor) -> XTupleYi:
+    def subforward(self, x: Tensor, hidden: List[nn.Linear], sample: BaseSample) -> XTupleYi:
         h: Tensor
-        for layer in self.hidden:
+        for layer in hidden:
             h = self.activation_fn.a(layer.__call__(x))
             x = h
-        return self.sample.__call__(x)
+        return sample.__call__(x)
+
+    def forward_(self, x: Tensor) -> XTupleYi:
+        return self.subforward(x, self.hidden, self.sample)
 
 
-class Decoder(ModuleXToX):
+class Decoder(ModuleXToX, PostInit):
     hidden: List[nn.Linear]
     reconstruction: nn.Linear
     activation_fn: Act
     output_activation: Opt[Act]
+    extras: Dict[str, Tensor]
 
     def __init__(self, dims: Tuple[int, Tuple[int, ...], int],
-                 activation_fn: Callable[[Tensor], Tensor]=tr.relu,
-                 output_activation: Opt[Callable[[Tensor], Tensor]]=tr.sigmoid):
+                 activation_fn: Callable[[Tensor], Tensor]=tr.selu,
+                 output_activation: Opt[Callable[[Tensor], Tensor]]=None):
         """
         Generative network
 
@@ -111,10 +133,12 @@ class Decoder(ModuleXToX):
         neurons = [z_dim, *h_dim]
         linear_layers = [nn.Linear(neurons[i - 1], neurons[i]) for i in range(1, len(neurons))]
         # noinspection PyTypeChecker
-        self.hidden = nn.ModuleList(linear_layers)
+        self.hidden = nn.ModuleList(linear_layers)  # type: ignore
         self.reconstruction = nn.Linear(h_dim[-1], x_dim)
         self.output_activation = Act(output_activation) if (output_activation is not None) else None
         self.activation_fn = Act(activation_fn)
+        self.extras = {}
+        self.__final_init__()
 
     def forward_(self, x: Tensor) -> Tensor:
         h: Tensor
@@ -125,54 +149,113 @@ class Decoder(ModuleXToX):
         return self.output_activation.a(x_preparams) if (self.output_activation is not None) else x_preparams
 
 
-class VerboseQZParams:
-    _qz_params: Opt[Tuple[Tensor, Tuple[Tensor, ...]]]
-    _save_qz_params: bool
+class PassthroughMeta:
+    _passthr_x: Opt[Tensor]
+    _neg_log_p_passthr_x: Opt[Tensor]
 
-    def __init__(self):
-        self._qz_params = None
-        self._save_qz_params = False
+    def __init__(self, passthrough_dim: int=1):
+        self.passthr_dim = passthrough_dim
+        self._passthr_x = None
+        self._neg_log_p_passthr_x = None
 
-    def set_save_qz_params(self, save_qz_params: bool=False) -> None:
+    def set_passthr_x(self, x: Tensor) -> None:
+        self._passthr_x = x[:, :self.passthr_dim]
+
+    @property
+    def passthr_x(self) -> Tensor:
+        if self._passthr_x is None:
+            raise ValueError
+        return self._passthr_x
+
+    @property
+    def neg_log_p_passthr_x(self) -> Tensor:
+        if self._neg_log_p_passthr_x is None:
+            raise ValueError
+        neg_log_p_passthr_x = self._neg_log_p_passthr_x
+        self._neg_log_p_passthr_x = None
+        return neg_log_p_passthr_x
+
+    # noinspection PyMethodMayBeStatic,PyUnusedLocal
+    def neg_log_p(self, x: Tensor) -> Opt[Tensor]:  # pylint: disable=unused-argument,no-self-use
+        return None
+
+    def extend_x(self, x: Tensor) -> Tensor:
+        passthr_x = self._passthr_x
+        self._passthr_x = None
+        if passthr_x is None:
+            raise ValueError
+        self._neg_log_p_passthr_x = self.neg_log_p(passthr_x)  # pylint: disable=assignment-from-none
+        return tr.cat((passthr_x, x), dim=-1)
+
+
+class Passer:
+    module: Opt[PassthroughMeta]
+
+    def __init__(self, module: nn.Module=None):
+        self.module = module if isinstance(module, PassthroughMeta) else None
+        if self.module is None:
+            print('WARNING! Passer: not isinstance(module, PassthroughMeta)')
+
+    @property
+    def neg_log_p_passthr_x(self) -> Union[int, Tensor]:
+        if self.module is None:
+            return 0
+        return self.module.neg_log_p_passthr_x
+
+
+class EncoderPassthrough(Encoder, PassthroughMeta):
+    def __init__(self, dims: Tuple[int, Tuple[int, ...], int],
+                 passthrough_dim: int = 1,
+                 sample_layer: Type[BaseSample]=GaussianSample,
+                 activation_fn: Callable[[Tensor], Tensor]=tr.selu):
         """
-        :param save_qz_params: whether to save z_params during forward pass.
+        Extends ``Encoder``. Does passthrough of first ``passthrough_dim`` elements
+        provided to ``self.set_passthr_x`` (prepended to ``input_dim``).
+
+        :param dims: dimensions of the networks
+           given by the number of neurons on the form
+           [input_dim, [hidden_dims], latent_dim].
+        :param sample_layer: subclass of the BaseSample
         """
-        self._save_qz_params = save_qz_params
+        PassthroughMeta.__init__(self=self, passthrough_dim=passthrough_dim)
+        x, h, z = dims
+        super(EncoderPassthrough, self).__init__(dims=(x + passthrough_dim, h, z), activation_fn=activation_fn,
+                                                 sample_layer=sample_layer)
 
-    def take_away_qz_params(self) -> Tuple[Opt[Tensor], Tuple[Tensor, ...]]:
+    def forward_(self, x: Tensor) -> XTupleYi:
+        return super(EncoderPassthrough, self).forward_(self.extend_x(x))
+
+
+class DecoderPassthrough(Decoder, PassthroughMeta):
+    def __init__(self, dims: Tuple[int, Tuple[int, ...], int],
+                 passthrough_dim: int=1,
+                 activation_fn: Callable[[Tensor], Tensor]=tr.selu,
+                 output_activation: Opt[Callable[[Tensor], Tensor]]=None):
         """
-        :return: saved self._qz_params: (z, qz_params) or (None, ())
-           Also clears self._qz_params.
+        Extends ``Decoder``. Does passthrough of first ``passthrough_dim`` of ``x`` elements
+        provided to ``self.set_passthr_x`` (prepended to ``latent_dim``).
+
+        :param dims: dimensions of the networks
+            given by the number of neurons on the form
+            [latent_dim, [hidden_dims], input_dim].
         """
-        _qz_params = self._qz_params
-        self._qz_params = None
-        if _qz_params is None:
-            return None, ()
-        z, qz_params = _qz_params
-        return z, qz_params
+        PassthroughMeta.__init__(self=self, passthrough_dim=passthrough_dim)
+        z, h, x = dims
+        super(DecoderPassthrough, self).__init__(dims=(z + passthrough_dim, h, x), activation_fn=activation_fn,
+                                                 output_activation=output_activation)
+
+    def forward_(self, x: Tensor) -> Tensor:
+        return super(DecoderPassthrough, self).forward_(self.extend_x(x))
 
 
-class TCKLDMeta:
-    tc_kld: Opt[BetaTCKLDLoss]
-    q_params_μ_first: bool
-
-    def __init__(self):
-        self.tc_kld = None
-
-    def set_tc_kld(self, beta_tc_kld: BetaTCKLDLoss):
-        self.tc_kld = beta_tc_kld
-        self.q_params_μ_first = self.tc_kld.q_params_μ_first
-
-
-class VariationalAutoencoder(ModuleXYToXY, VerboseQZParams, TCKLDMeta):
+class VariationalAutoencoder(ModuleXYToXYDictStrOptZ, PostInit):
     z_dim: int
     encoder: Encoder
     decoder: Decoder
-    qz_x_flow: Opt[ZToXY]
-    q_params_μ_first: bool
+    _kld: KLDLoss
 
     def __init__(self, dims: Tuple[int, int, Tuple[int, ...]], Encode: Type[Encoder]=Encoder,
-                 Decode: Type[Decoder]=Decoder):
+                 Decode: Type[Decoder]=Decoder, kld: KLDLoss=None):
         """
         Variational Autoencoder [Kingma 2013] model
         consisting of an encoder/decoder pair for which
@@ -182,76 +265,45 @@ class VariationalAutoencoder(ModuleXYToXY, VerboseQZParams, TCKLDMeta):
         :param dims: x, z and hidden dimensions of the networks
         """
         super(VariationalAutoencoder, self).__init__()
-        VerboseQZParams.__init__(self=self)
-        TCKLDMeta.__init__(self=self)
 
         x_dim, z_dim, h_dim = dims
         self.z_dim = z_dim
+        self.set_kld(kld if (kld is not None) else KLDLoss())
 
         self.encoder = Encode((x_dim, h_dim, z_dim))
         self.decoder = Decode((z_dim, tuple(reversed(h_dim)), x_dim))
+        self.__final_init__()
 
-        self.qz_x_flow = None
-        self.q_params_μ_first = True
+    @property
+    def kld(self) -> KLDLoss:
+        return self._kld
 
-    def _kld_normal(self, z: Tensor, qz_params: Tuple[Tensor, ...],
-                    pz_params: Tuple[Tensor, ...]=None, try_closed_form: bool=True) -> Tuple[Tensor, Tensor]:
+    def set_kld(self, kld: KLDLoss):
+        """ Do not change kld after setting it! """
+        self._kld = kld
+
+    def encode(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tuple[Tensor, ...]]:  # pylint: disable=unused-argument
         """
-        Computes the KL-divergence of some element z.
-
-        KL(q||p) = -∫ q(z) log [ p(z) / q(z) ]
-                 = -E[log p(z) - log q(z)]
-
-        :param z: sample from q-distribuion
-        :param qz_params: (μ, log_σ) of the q-distribution
-        :param pz_params: (μ, log_σ) of the p-distribution
-        :param try_closed_form:
-        :return: KL(q||p), flow(z)
+        :param x: input data
+        :param y: unused dummy
+        :return: (flow_qz_x(z), qz_params)
         """
-        if try_closed_form and (self.qz_x_flow is None):
-            return Normal.kl(qz_params, pz_params).view(z.shape[0], -1).sum(dim=1), z
+        z, qz_params = self.encoder.__call__(x)
+        return self.kld.flow_qz_x(z), qz_params
 
-        q_μ, q_log_σ = qz_params
-        log_qz_x = log_gaussian(z, μ=q_μ, log_σ=q_log_σ)
+    def forward_vae_to_z(self, x: Tensor, y: Tensor  # pylint: disable=unused-argument
+                         ) -> Tuple[Tensor, Tuple[Tensor, ...]]:
+        z, qz_params = self.encoder.__call__(x)
+        return z, qz_params
 
-        sladetj: Union[Tensor, int]
-        if self.qz_x_flow is not None:
-            fz, sladetj = self.qz_x_flow.__call__(z)
-            sladetj = sladetj.view(sladetj.size(0), -1).sum(dim=1)
-        else:
-            fz, sladetj = z, 0
+    def forward_vae_to_x(self, z: Tensor, qz_params: Tuple[Tensor, ...]) -> XYDictStrZ:
+        """ z is sampled from q(z) """
+        kld, z, verb = self.kld.__call__(z, qz_params)
 
-        if pz_params is not None:
-            p_μ, p_log_σ = pz_params
-            log_pz = log_gaussian(fz, μ=p_μ, log_σ=p_log_σ)
-        else:
-            log_pz = log_standard_gaussian(fz)
+        x_rec = self.decoder.__call__(z)
+        return x_rec, kld, verb
 
-        kld = log_qz_x - sladetj - log_pz  # sladetj := sum_log_abs_det_jacobian
-        return kld, fz
-
-    def _kld(self, z: Tensor, qz_params: Tuple[Tensor, ...], pz_params: Tuple[Tensor, ...]=None,
-             unmod_kld: bool=False) -> Tuple[Tensor, Tensor]:  # pylint: disable=unused-argument
-        """
-        Computes the KL-divergence of
-        some element z.
-
-        KL(q||p) = -∫ q(z) log [ p(z) / q(z) ]
-                 = -E[log p(z) - log q(z)]
-
-        :param z: sample from q-distribuion
-        :param qz_params: (μ, log_σ) of the q-distribution
-        :param pz_params: (μ, log_σ) of the p-distribution
-        :param unmod_kld: force unmodified KLD (useful for subclasses)
-        :return: KL(q||p), flow(z)
-        """
-        return self._kld_normal(z=z, qz_params=qz_params, pz_params=pz_params)
-
-    def set_qz_x_flow(self, flow: ZToXY):
-        self.qz_x_flow = flow
-        self.q_params_μ_first = False
-
-    def forward_(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor]:  # pylint: disable=unused-argument
+    def forward_(self, x: Tensor, y: Tensor) -> XYDictStrZ:  # pylint: disable=unused-argument
         """
         Runs a data point through the model in order
         to provide it's reconstruction.
@@ -260,28 +312,37 @@ class VariationalAutoencoder(ModuleXYToXY, VerboseQZParams, TCKLDMeta):
         :param y: unused dummy
         :return: (reconstructed input, kld)
         """
-        z, qz_params = self.encoder.__call__(x)
+        z, qz_params = self.forward_vae_to_z(x, y)
+        return self.forward_vae_to_x(z, qz_params)
 
-        kld, z = self._kld(z, qz_params)
-
-        if self._save_qz_params:
-            self._qz_params = (z, qz_params)
-
-        x_rec = self.decoder.__call__(z)
-        return x_rec, kld
-
-    def sample(self, z: Tensor, y: Tensor) -> Tensor:  # pylint: disable=unused-argument
+    def sample(self, z: Tensor, y: Tensor, use_pz_flow: bool=True) -> Tensor:  # pylint: disable=unused-argument
         """
         Given z ~ N(0, I) generates a sample from
         the learned distribution based on p_θ(x|z).
         :param z: Random normal variable
         :param y: unused dummy
+        :param use_pz_flow:
         :return: generated sample
         """
+        z = self.kld.flow_pz(z) if use_pz_flow else z
         return self.decoder.__call__(z)
 
 
-class GumbelAutoencoder(ModuleXYToXY, VerboseQZParams):
+class VAEPassthrough(VariationalAutoencoder):
+    decoder: DecoderPassthrough
+
+    def __init__(self, dims: Tuple[int, int, Tuple[int, ...]],
+                 Encode: Type[Encoder]=Encoder,
+                 Decode: Type[DecoderPassthrough]=DecoderPassthrough,
+                 kld: KLDLoss=None) -> None:
+        super(VAEPassthrough, self).__init__(dims=dims, Encode=Encode, Decode=Decode, kld=kld)
+
+    def forward_vae_to_z(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tuple[Tensor, ...]]:
+        self.decoder.set_passthr_x(x)
+        return super(VAEPassthrough, self).forward_vae_to_z(x=x, y=y)
+
+
+class GumbelAutoencoder(ModuleXYToXYDictStrOptZ):
     z_dim: int
     n_samples: int
     encoder: Perceptron
@@ -293,7 +354,6 @@ class GumbelAutoencoder(ModuleXYToXY, VerboseQZParams):
                  Encode: Type[Perceptron]=Perceptron,
                  Decode: Type[Perceptron]=Perceptron):
         super(GumbelAutoencoder, self).__init__()
-        VerboseQZParams.__init__(self=self)
 
         x_dim, z_dim, h_dim = dims
         self.z_dim = z_dim
@@ -301,7 +361,7 @@ class GumbelAutoencoder(ModuleXYToXY, VerboseQZParams):
 
         self.encoder = Encode([x_dim, *h_dim])
         self.sampler = GumbelSoftmax(h_dim[-1], z_dim, n_samples)
-        self.decoder = Decode([z_dim, *reversed(h_dim), x_dim], output_activation=tr.sigmoid)
+        self.decoder = Decode([z_dim, *reversed(h_dim), x_dim])
 
         self.register_buffer('k', tr.tensor([float(self.z_dim)]))
 
@@ -314,24 +374,32 @@ class GumbelAutoencoder(ModuleXYToXY, VerboseQZParams):
     def set_τ(self, τ: float=1.0):
         self.sampler.set_τ(τ)
 
-    def forward_(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor]:  # pylint: disable=unused-argument
+    # noinspection PyUnusedLocal
+    def encode(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tuple[Tensor, ...]]:  # pylint: disable=unused-argument
+        """
+        :param x: input data
+        :param y: unused dummy
+        :return: (sample, qz_params)
+        """
+        x = self.encoder.__call__(x)
+        sample, qz_params = self.sampler.__call__(x)
+        return sample, qz_params
+
+    def forward_(self, x: Tensor, y: Tensor) -> XYDictStrZ:  # pylint: disable=unused-argument
         """
         Runs a data point through the model in order
         to provide it's reconstruction.
 
         :param x: input data
         :param y: unused dummy
-        :return: (reconstructed input, kld)
+        :return: (reconstructed input, kld, {})
         """
         x = self.encoder.__call__(x)
         sample, qz_params = self.sampler.__call__(x)
 
-        if self._save_qz_params:
-            self._qz_params = (sample, qz_params)
-
         kld = self._kld(qz_params=qz_params)
         x_rec = self.decoder.__call__(sample)
-        return x_rec, kld
+        return x_rec, kld, {}
 
     def sample(self, z: Tensor) -> Tensor:
         return self.decoder.__call__(z)
@@ -424,6 +492,10 @@ class LadderDecoder(BaseLadderDecoder):
         return z, (q_z, (q_μ, q_log_σ), (p_μ, p_log_σ))
 
 
+class LadderKLDLoss(KLDLoss):
+    pass
+
+
 class LadderVariationalAutoencoder(VariationalAutoencoder):
     encoder: List[LadderEncoder]  # type: ignore
     decoder: List[LadderDecoder]  # type: ignore
@@ -432,7 +504,8 @@ class LadderVariationalAutoencoder(VariationalAutoencoder):
     def __init__(self, dims: Tuple[int, Tuple[int, ...], Tuple[int, ...]],
                  LadderEncode: Type[LadderEncoder]=LadderEncoder,
                  LadderDecode: Type[LadderDecoder]=LadderDecoder,
-                 Decode: Type[Decoder]=Decoder):
+                 Decode: Type[Decoder]=Decoder,
+                 kld: LadderKLDLoss=None):
         """
         Ladder Variational Autoencoder as described by
         [Sønderby 2016]. Adds several stochastic
@@ -441,19 +514,25 @@ class LadderVariationalAutoencoder(VariationalAutoencoder):
         :param dims: x, z and hidden dimensions of the networks
         """
         x_dim, z_dim, h_dim = dims
-        super(LadderVariationalAutoencoder, self).__init__((x_dim, z_dim[0], h_dim))
+        super(LadderVariationalAutoencoder, self).__init__((x_dim, z_dim[0], h_dim), kld=kld)
 
         neurons: List[int] = [x_dim, *h_dim]
         encoder_layers = [LadderEncode((neurons[i - 1], neurons[i], z_dim[i - 1])) for i in range(1, len(neurons))]
         decoder_layers = [LadderDecode((z_dim[i - 1], h_dim[i - 1], z_dim[i])) for i in range(1, len(h_dim))][::-1]
 
         # noinspection PyTypeChecker
-        self.encoder = nn.ModuleList(encoder_layers)
+        self.encoder = nn.ModuleList(encoder_layers)  # type: ignore
         # noinspection PyTypeChecker
-        self.decoder = nn.ModuleList(decoder_layers)
+        self.decoder = nn.ModuleList(decoder_layers)  # type: ignore
         self.reconstruction = Decode((z_dim[0], h_dim, x_dim))
 
-    def forward_(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor]:
+    def set_kld(self, kld: KLDLoss):
+        assert isinstance(kld, LadderKLDLoss) and kld.closed_form
+        self._kld = kld
+
+    # noinspection PyUnusedLocal
+    def forward_lvae_to_z(self, x: Tensor, y: Tensor  # pylint: disable=unused-argument
+                          ) -> Tuple[Tensor, List[Tuple[Tensor, Tensor]]]:
         # Gather latent representation
         # from encoders along with final z.
         latents: List[Tuple[Tensor, Tensor]] = []
@@ -466,27 +545,35 @@ class LadderVariationalAutoencoder(VariationalAutoencoder):
         z = z
 
         latents = list(reversed(latents))
+        return z, latents
 
+    def forward_lvae_to_x(self, z: Tensor, latents: List[Tuple[Tensor, Tensor]]) -> XYDictStrZ:
         # If at top, encoder == decoder, use prior for KL:
         l_μ, l_log_σ = latents[0]
-        kld, z = self._kld(z, (l_μ, l_log_σ))
+        kld, z, _ = self.kld.__call__(z, (l_μ, l_log_σ))
         kl_divergence = kld
-
-        if self._save_qz_params:
-            self._qz_params = (z, (l_μ, l_log_σ))
 
         # Perform downward merge of information:
         for i, decoder in enumerate(self.decoder):
             l_μ, l_log_σ = latents[i + 1]
             h, (q_z, q_params, p_params) = decoder.__call__(z, l_μ, l_log_σ)
-            kld, _ = self._kld(q_z, q_params, p_params, unmod_kld=True)
+            kld, _, _ = self.kld.__call__(q_z, q_params, p_params)
             kl_divergence += kld
             z = h
 
         x_rec = self.reconstruction.__call__(z)
-        return x_rec, kl_divergence
+        return x_rec, kl_divergence, {}
 
-    def sample(self, z: Tensor, y: Tensor=None) -> Tensor:  # pylint: disable=unused-argument
+    def encode(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tuple[Tensor, ...]]:
+        z, latents = self.forward_lvae_to_z(x, y)
+        return self.kld.flow_qz_x(z), latents[0]
+
+    def forward_(self, x: Tensor, y: Tensor) -> XYDictStrZ:
+        z, latents = self.forward_lvae_to_z(x, y)
+        return self.forward_lvae_to_x(z, latents)
+
+    def sample(self, z: Tensor, y: Tensor=None, use_pz_flow: bool=True) -> Tensor:  # pylint: disable=unused-argument
+        z = self.kld.flow_pz(z) if use_pz_flow else z
         h: Tensor
         for decoder in self.decoder:
             h, _, _ = decoder.sample2(z)

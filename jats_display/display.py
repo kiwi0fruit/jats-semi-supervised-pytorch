@@ -1,8 +1,7 @@
-from typing import Callable, List, Union, Tuple, Dict, Optional as Opt, Any
+from typing import Callable, List, Union, Tuple, Dict, Optional as Opt, Any, NamedTuple
 from dataclasses import asdict
 # from types import ModuleType
 from os import path as p
-import numbers
 import torch as tr
 from torch import Tensor
 import numpy as np
@@ -12,65 +11,97 @@ import numpy.linalg as la
 import pandas as pd
 import seaborn as sns
 import IPython.display as ds
-from kiwi_bugfix_typechecker import ipython
+from kiwi_bugfix_typechecker import ipython, test_assert
 
-from beta_tcvae_typed import Normal
-from semi_supervised_typed import VariationalAutoencoder, SVI, DeepGenerativeModel, AuxiliaryDeepGenerativeModel
-from vae import BaseWeightedLoss, TrimLoss
+from beta_tcvae_typed import Normal, BetaTCKLDLoss, KLDLoss
+from semi_supervised_typed import (VariationalAutoencoder, SVI, DeepGenerativeModel, AuxiliaryDeepGenerativeModel,
+                                   VAEClassifyMeta, Passer)
+from vae import BaseWeightedLoss
 from vae.utils import get_x_normalized_μ_σ, ndarr
-from vae.data import Dim, TrainLoader, VAELoaderReturnType
+from vae.data import TrainLoader, LoaderRetType
 from vae.display import Log
 from vae.linear_component_analyzer import LinearAnalyzer
+from vae.tools import get_z_ymax
 from socionics_db import JATSModelOutput, Transforms, Data
 from jats_vae.utils import print_err_tuple, euc_dist_count_types, TestArraysToTensors
-from jats_vae.data import get_zμ_ymax
+from jats_vae.semi_supervised import ClassifierPassthrJATS24KhCFBase
 from .colors import types_colors  # pylint: disable=relative-beyond-top-level
 
+
+test_assert()
 DEBUG = False
+DISPLAY = False
 LstTpl = List[Tuple[str, Union[int, Tensor]]]
 LstTplOpt = List[Tuple[str, Union[int, Tensor, None]]]
 ε = 10**-8
 
 
-def plot_z_cov(z: Array, weights: Opt[Array], file: str, sub: Callable[[Array], Array]=lambda m: m) -> None:
+class Batch(NamedTuple):
+    x: Opt[Tensor]
+    x_nll: Opt[Tensor]
+    w_mat: Opt[Tensor]
+    y: Opt[Tensor]
+    u: Tensor
+    u_nll: Opt[Tensor]
+    w_mat_u: Opt[Tensor]
+
+
+def plot_z_cov(z: Array, weights: Opt[Array], file: str, sub: Callable[[Array], Array]=lambda m: m,
+               basis_strip: Tuple[Tuple[int, ...], Tuple[int, ...]]=None) -> None:
     import matplotlibhelper as mh
     import matplotlib.pyplot as plt
     z_normalized, _, _ = get_x_normalized_μ_σ(z, weights)
     Σ = np.cov(z_normalized.T, aweights=weights)
     E = np.eye(len(Σ)) if Σ.shape else np.eye(1)
     fig = plt.figure(figsize=mh.figsize(w=6))
-    sns.heatmap(sub(Σ - E), center=0, square=True, mask=sub(E > (1 - ε)))
-    plt.title(p.basename(file))
+    corr_mat = sub(Σ - E)
+    mask = sub(E > (1 - ε))
+    if basis_strip is not None:
+        strip_0, strip_1 = basis_strip
+        if strip_0:
+            mask[strip_0, :] = True
+            corr_mat[strip_0, :] = 0.
+        if strip_1:
+            mask[:, strip_1] = True
+            corr_mat[:, strip_1] = 0.
+    sns.heatmap(corr_mat, center=0, square=True, mask=mask)
+    plt.title(p.basename(file) + f'_MaxAbs={np.max(np.abs(corr_mat)):.3f}')
     fig.tight_layout()
-    ipython.display(ds.HTML(f'<img src="{mh.img(plt, name=file)}" width="900">'))
+    img = mh.img(name=file)
+    if DISPLAY:
+        ipython.display(ds.HTML(f'<img src="{img}" width="900">'))
 
 
-def plot_dist(basis: List[int], z_batch: Array, z: Array, types: Array,  # pylint: disable=too-many-branches
-              types_self: Array, file: str, μ_z: Union[Array, float]=None, σ_z: Union[Array, float]=None,
-              plt_types: Tuple[int, ...]=tuple(range(1, 17)), questions: bool=False, refs: Array=None) -> None:
-    if not basis or (len(basis) == 1):
+def plot_dist(z_batch: Opt[Array], z: Array, types: Array,  # pylint: disable=too-many-branches
+              types_self: Array, file: str, μ_z: Array=None, σ_z: Array=None,
+              plt_types: Tuple[int, ...]=tuple(range(1, 17)), questions: bool=False) -> None:
+    z_dims = z.shape[1]
+    if z_dims == 1:
         return  # presumably matplotlib is buggy in this case
     import matplotlibhelper as mh
     import matplotlib.pyplot as plt
 
-    fig, axs = plt.subplots(len(basis), 4, figsize=(16, 3 * len(basis)))
-    for i, j in enumerate(basis):
+    fig, axs = plt.subplots(z_dims, 4, figsize=(16, 3 * z_dims))
+    for i in range(z_dims):
+        j = i
         ax_title = mh.stex(f'ˎs_˱{i}˲ˎ (ˎz_˱{j}˲ˎ)')
 
         # 1st plot (all database):
         ax = axs[i, 0]
-        z1, z2 = z_batch[:, j], z[:, i]
-        sns.distplot(z1, bins=30, ax=ax)
-        sns.distplot(z2, bins=30, ax=ax)
-        if (μ_z is None) and (σ_z is None):
-            μz_σz = ''
-        elif isinstance(μ_z, numbers.Real) and isinstance(σ_z, numbers.Real):
-            μz_σz = f';{μ_z:.2f},{σ_z:.2f}'
-        elif isinstance(μ_z, Array) and isinstance(σ_z, Array):
-            μz_σz = f';{μ_z[j]:.2f},{σ_z[j]:.2f}'
+        if z_batch is not None:
+            z1, z2 = z_batch[:, j], z[:, i]
+            sns.distplot(z1, bins=30, ax=ax)
+            sns.distplot(z2, bins=30, ax=ax)
+            if (μ_z is None) and (σ_z is None):
+                μz_σz = ''
+            elif isinstance(μ_z, Array) and isinstance(σ_z, Array):
+                μz_σz = f';{μ_z[j]:.2f},{σ_z[j]:.2f}'
+            else:
+                raise ValueError(f'Bad μ_z and/or σ_z:\n{μ_z};\n{σ_z}')
+            ax.set_title(ax_title + f', μ,σ={np.mean(z1.T):.2f},{np.std(z1.T):.2f}' + μz_σz)
         else:
-            raise ValueError(f'Bad μ_z and/or σ_z:\n{μ_z};\n{σ_z}')
-        ax.set_title(ax_title + f', μ,σ={np.mean(z1.T):.2f},{np.std(z1.T):.2f}' + μz_σz)
+            sns.distplot(z[:, i], bins=30, ax=ax)
+            ax.set_title(ax_title)
 
         # 2nd plot (per-type density for Talanov's diags.):
         for type_ in plt_types:
@@ -101,54 +132,58 @@ def plot_dist(basis: List[int], z_batch: Array, z: Array, types: Array,  # pylin
         for type_ in plt_types:
             Z = z[(types == type_) & (types_self == type_), i]
             sns.kdeplot(Z, kernel='gau', ax=ax, color=types_colors[type_ - 1], bw=0.075 if questions else "scott")
-        if refs is not None:
-            for type_ in plt_types:
-                ax.plot(refs[type_ - 1, i], 0, color=types_colors[type_ - 1], marker='o', linestyle='')
         ax.set_title(ax_title + ' axis (Tal. = self)')
 
     fig.tight_layout()
-    ipython.display(ds.HTML(f'<img src="{mh.img(plt, name=file)}" width="900">'))
+    img = mh.img(name=file)
+    if DISPLAY:
+        ipython.display(ds.HTML(f'<img src="{img}" width="900">'))
 
 
 def get_x_plot_batch(data_loader: TrainLoader) -> Array:
+    batch_size = data_loader.unlabelled.batch_size
     data_loader.regenerate_loaders(batch_size=1600)
-    train_loader = data_loader.get_vae_loader()
-    item: VAELoaderReturnType = next(iter(train_loader))
+    train_loader = data_loader.get_loader()
+    item: LoaderRetType = next(iter(train_loader))
     x_batch, _, _, _ = item
+    data_loader.regenerate_loaders(batch_size=batch_size)
     return ndarr(x_batch)
 
 
 def get__x__z__plot_batch(model: VariationalAutoencoder, data_loader: TrainLoader) -> Tuple[Array, Array]:
+    batch_size = data_loader.unlabelled.batch_size
     data_loader.regenerate_loaders(batch_size=1600)
-    train_loader = data_loader.get_vae_loader()
-    item: VAELoaderReturnType = next(iter(train_loader))
+    train_loader = data_loader.get_loader()
+    item: LoaderRetType = next(iter(train_loader))
     x_batch, _, _, _ = item
     with tr.no_grad():
-        z_batch, _, _, _, _ = get_zμ_ymax(x=x_batch, model=model)
+        z_batch, _, _, _ = get_z_ymax(x=x_batch, y=None, model=model)
+    data_loader.regenerate_loaders(batch_size=batch_size)
     return ndarr(x_batch), ndarr(z_batch)
 
 
 def plot_jats(weight: Opt[Array], prefix_path_db_nn: str, prefix_path_db: str, types_tal: Array, types_self: Array,
-              x_batch: Array=None, z_batch: Array=None, profiles: JATSModelOutput=None,
-              pca: LinearAnalyzer=None, fa: LinearAnalyzer=None,
-              plot_questions: bool=False, plot_pca: bool=False, plt_types: Tuple[int, ...]=tuple(range(1, 17))) -> None:
+              x_batch: Array, lrn_idxs: List[int]=None, tst_idxs: List[int]=None,
+              z_batch: Array=None, profiles: JATSModelOutput=None,
+              pca: LinearAnalyzer=None, fa: LinearAnalyzer=None, plot_pca: bool=False,
+              plt_types: Tuple[int, ...]=tuple(range(1, 17)),
+              basis_strip: Tuple[int, ...]=()) -> None:
     """
     Plot latent dimensions.
     """
+    def int2none(inp: Union[int, Array]) -> Opt[Array]:
+        if isinstance(inp, int):
+            return None
+        return inp
+
     if plot_pca and pca is not None:
-        if x_batch is None:
-            raise ValueError('x_batch is None')
-        plot_dist(list(range(pca.n)), z_batch=pca.transform(x_batch),
-                  z=pca.z_normalized, μ_z=pca.μ_z, σ_z=pca.σ_z, file=prefix_path_db + f'-WPCA{pca.n}',
-                  refs=pca.z_norm_refs, types=types_tal, types_self=types_self, plt_types=plt_types)
+        plot_dist(z_batch=pca.transform(x_batch), z=pca.z_normalized, μ_z=int2none(pca.μ_z), σ_z=int2none(pca.σ_z),
+                  file=prefix_path_db + f'-WPCA{pca.n}', types=types_tal, types_self=types_self, plt_types=plt_types)
         plot_z_cov(pca.z_normalized, weight, file=prefix_path_db + f'-WPCA{pca.n}-z-cov')
 
     if plot_pca and fa is not None:
-        if x_batch is None:
-            raise ValueError('x_batch is None')
-        plot_dist(list(range(fa.n)), z_batch=fa.transform(x_batch),
-                  z=fa.z_normalized, μ_z=fa.μ_z, σ_z=fa.σ_z, file=prefix_path_db + f'-WFA{fa.n}',
-                  refs=fa.z_norm_refs, types=types_tal, types_self=types_self, plt_types=plt_types)
+        plot_dist(z_batch=fa.transform(x_batch), z=fa.z_normalized, μ_z=int2none(fa.μ_z), σ_z=int2none(fa.σ_z),
+                  file=prefix_path_db + f'-WFA{fa.n}', types=types_tal, types_self=types_self, plt_types=plt_types)
         plot_z_cov(fa.z_normalized, weight, file=prefix_path_db + f'-WFA{fa.n}-z-cov')
 
     if plot_pca and (pca is not None) and (fa is not None):
@@ -159,33 +194,58 @@ def plot_jats(weight: Opt[Array], prefix_path_db_nn: str, prefix_path_db: str, t
     if profiles is not None:
         if (z_batch is None) or (pca is None) or (fa is None):
             raise ValueError('(zμ_batch is None) or (pca is None) or (fa is None)')
-        μ, σ = profiles.μ_z, profiles.σ_z
-        plot_dist(profiles.basis, z_batch=(z_batch - μ) / σ, z=profiles.z_normalized, μ_z=μ, σ_z=σ,
-                  file=prefix_path_db_nn, refs=profiles.z_norm_refs, types=types_tal, types_self=types_self,
+        plot_dist(z_batch=z_batch, z=profiles.z, μ_z=profiles.μz, σ_z=profiles.σz,
+                  file=prefix_path_db_nn, types=types_tal, types_self=types_self,
                   plt_types=plt_types)
-        plot_z_cov(profiles.z_normalized, weight, file=prefix_path_db_nn + '-z-cov')
+
+        # male_idxs, male_idxs_batch = profiles.x[:, 0] > 0.5, x_batch[:, 0] > 0.5
+        # plot_dist(z_batch=z_batch[male_idxs_batch], z=profiles.z[male_idxs],
+        #           file=prefix_path_db_nn + "-male", types=types_tal[male_idxs], types_self=types_self[male_idxs],
+        #           plt_types=plt_types)
+        # plot_dist(z_batch=z_batch[~male_idxs_batch], z=profiles.z[~male_idxs],
+        #           file=prefix_path_db_nn + "-female", types=types_tal[~male_idxs], types_self=types_self[~male_idxs],
+        #           plt_types=plt_types)
+
+        if lrn_idxs:
+            plot_dist(z_batch=None, z=profiles.z[lrn_idxs], μ_z=profiles.μz, σ_z=profiles.σz,
+                      file=prefix_path_db_nn + "-lrn", types=types_tal[lrn_idxs], types_self=types_self[lrn_idxs],
+                      plt_types=plt_types)
+        if tst_idxs:
+            plot_dist(z_batch=None, z=profiles.z[tst_idxs], μ_z=profiles.μz, σ_z=profiles.σz,
+                      file=prefix_path_db_nn + "-tst", types=types_tal[tst_idxs], types_self=types_self[tst_idxs],
+                      plt_types=plt_types)
+
+        plot_dist(z_batch=None, z=profiles.fzμ, file=prefix_path_db_nn + '-fzmu',
+                  types=types_tal, types_self=types_self, plt_types=plt_types)
+        if profiles.a is not None:
+            plot_dist(z_batch=None, z=profiles.a, file=prefix_path_db_nn + '-a',
+                      types=types_tal, types_self=types_self, plt_types=plt_types)
+            # if lrn_idxs:
+            #     plot_dist(z_batch=None, z=profiles.a[lrn_idxs], file=prefix_path_db_nn + '-a-lrn',
+            #               types=types_tal[lrn_idxs], types_self=types_self[lrn_idxs], plt_types=plt_types)
+            # if tst_idxs:
+            #     plot_dist(z_batch=None, z=profiles.a[tst_idxs], file=prefix_path_db_nn + '-a-tst',
+            #               types=types_tal[tst_idxs], types_self=types_self[tst_idxs], plt_types=plt_types)
+        if profiles.b is not None:
+            plot_dist(z_batch=None, z=profiles.b, file=prefix_path_db_nn + '-b',
+                      types=types_tal, types_self=types_self, plt_types=plt_types)
+        if profiles.c is not None:
+            plot_dist(z_batch=None, z=profiles.c, file=prefix_path_db_nn + '-c',
+                      types=types_tal, types_self=types_self, plt_types=plt_types)
+
+        plot_z_cov(profiles.zμ, weight, file=prefix_path_db_nn + '-z-cov', basis_strip=(basis_strip, basis_strip))
+        plot_z_cov(profiles.fzμ, weight, file=prefix_path_db_nn + '-fz-cov', basis_strip=(basis_strip, basis_strip))
+
         len_ = pca.z_normalized.shape[1]
-        plot_z_cov(np.concatenate((pca.z_normalized, profiles.z_normalized), axis=1),
+        plot_z_cov(np.concatenate((pca.z_normalized, profiles.zμ), axis=1),
                    weight, file=prefix_path_db_nn + f'-pca{pca.n}-vs-z', sub=lambda m: np.abs(m[:len_, len_:]))
         len_ = fa.z_normalized.shape[1]
-        plot_z_cov(np.concatenate((fa.z_normalized, profiles.z_normalized), axis=1),
+        plot_z_cov(np.concatenate((fa.z_normalized, profiles.zμ), axis=1),
                    weight, file=prefix_path_db_nn + f'-fa{fa.n}-vs-z', sub=lambda m: np.abs(m[:len_, len_:]))
-
-    if plot_questions:
-        if (x_batch is None) or (profiles is None):
-            raise ValueError('(x_batch is None) or (profiles is None)')
-        n = len(x_batch[0])
-        buckets = [
-            [i * 16 + j for j in range(16)] for i in range(n // 16)
-        ] + [[(n // 16) * 16 + i for i in range(n % 16)]]
-        for i, bucket in enumerate(buckets):
-            plot_dist(bucket, z_batch=x_batch, z=profiles.x, file=prefix_path_db + f'-NormQuestions{i}',
-                      questions=True, types=types_tal, types_self=types_self, plt_types=plt_types)
 
 
 def explore_jats(profiles: JATSModelOutput,
                  dat: Data,
-                 dims: Dim,
                  trans: Transforms,
                  types: Array,
                  types_sex: Array,
@@ -193,17 +253,11 @@ def explore_jats(profiles: JATSModelOutput,
                  logger: Log,
                  pca: LinearAnalyzer,
                  fa: LinearAnalyzer,
-                 mmd_dists: Dict[int, str]=None,
+                 ids: Array,
                  inspect: Tuple[int, ...]=None) -> None:
     lg = logger
     if inspect is None:
         inspect = tuple(range(len(dat.interesting)))
-
-    dropped_kld = list(np.round(np.array(profiles.dropped_kld), 2)) if (profiles.dropped_kld is not None) else ''
-    lg.print(f'''Used {len(profiles.basis)}/{dims.z} dimensions.
-        Used dims: {profiles.basis},
-        KLD of dropped dims: {dropped_kld}.
-        '''.replace('\n        ', '\n'))
 
     intrs_kwargs = asdict(profiles)
     L = len(profiles.x)
@@ -211,14 +265,14 @@ def explore_jats(profiles: JATSModelOutput,
         if isinstance(v, Array) and (len(v) == L):
             v_: Array = v
             intrs_kwargs[k] = v_[dat.interesting]
-    intrs_kwargs['x_rec_disc'] = tuple(s[dat.interesting] for s in profiles.x_rec_disc)
+    intrs_kwargs['x_rec_disc_zμ'] = tuple(s[dat.interesting] for s in profiles.x_rec_disc_zμ)
     intrs = JATSModelOutput(**intrs_kwargs)
 
     # Peek questions of selected profiles:
     # -------------------------------------------------------
     out = np.stack(
         [trans.to_1__5(intrs.x[i]) - 3 for i in inspect] +
-        [trans.to_1__5(intrs.x_rec_disc[0][i]) - 3 for i in inspect],
+        [trans.to_1__5(intrs.x_rec_disc_zμ[0][i]) - 3 for i in inspect],
         axis=-1)
     # lg.print(f'All questions ({len(out)}):\n', out)
     # pd.DataFrame(out).to_csv(p.join(TMP, '__view.csv'))
@@ -243,36 +297,14 @@ def explore_jats(profiles: JATSModelOutput,
         lg.print(s)
         lg.print_i(s)
 
-    print_err_tuple(profiles.x_rec_cont, *profiles.x_rec_disc, profiles.x_rec_sample,
+    print_err_tuple(profiles.x_rec_cont_zμ, *profiles.x_rec_disc_zμ, profiles.x_rec_sample_zμ,
                     x=profiles.x, data=dat, line_printer=line_printer)
-
-    lg.print(mmd_dists)
-    lg.print_i(mmd_dists)
 
     # Inspect selected profiles:
     # -------------------------------------------------------
     def mse_(x, y): return np.mean(np.power(x - y, 2))
 
-    lg.print('First counted refs-FA types, then refs-PCA, then refs-NN, then y-NN, then TT, then TT=self, then TT_sex.')
-
-    try:
-        lg.display(pd.DataFrame(euc_dist_count_types(fa.z_normalized, fa.z_norm_refs).reshape((4, 4))))
-        lg.print('refs-FA.\n\n')
-    except ValueError:
-        lg.print('refs-FA count failed')
-
-    try:
-        lg.display(pd.DataFrame(euc_dist_count_types(pca.z_normalized, pca.z_norm_refs).reshape((4, 4))))
-        lg.print('refs-PCA.\n\n')
-    except ValueError:
-        lg.print('refs-PCA count failed')
-
-    try:
-        lg.display(pd.DataFrame(euc_dist_count_types(profiles.z_normalized,
-                                                     profiles.z_norm_refs).reshape((4, 4))))
-        lg.print('refs-NN.\n\n')
-    except ValueError:
-        lg.print('refs-NN count failed')
+    lg.print('First counted y-NN, then TT, then TT=self, then TT_sex.')
 
     if profiles.y_probs is not None:
         try:
@@ -314,12 +346,12 @@ def explore_jats(profiles: JATSModelOutput,
     for i in inspect:
         lg.print(
             f'Inspect `interesting[{i}]`:\n' +
-            f'MSE #{i}:nn(#{i})            = {mse_(intrs.x[i], intrs.x_rec_cont[i]):.3f}\n' +
-            f'MSE discr. #{i}:nn(#{i})     = {mse_(intrs.x[i], intrs.x_rec_disc[0][i]):.3f}\n' +
+            f'MSE #{i}:nn(#{i})            = {mse_(intrs.x[i], intrs.x_rec_cont_zμ[i]):.3f}\n' +
+            f'MSE discr. #{i}:nn(#{i})     = {mse_(intrs.x[i], intrs.x_rec_disc_zμ[0][i]):.3f}\n' +
             ''.join([
                 f'MSE discr. #{i}:#{j}         = {mse_(intrs.x[i], intrs.x[j]):.3f}\n' +
-                f'MSE nn(#{i}):nn(#{j})        = {mse_(intrs.x_rec_cont[i], intrs.x_rec_cont[j]):.3f}\n' +
-                f'MSE discr. nn(#{i}):nn(#{j}) = {mse_(intrs.x_rec_disc[0][i], intrs.x_rec_disc[0][j]):.3f}\n'
+                f'MSE nn(#{i}):nn(#{j})        = {mse_(intrs.x_rec_cont_zμ[i], intrs.x_rec_cont_zμ[j]):.3f}\n' +
+                f'MSE discr. nn(#{i}):nn(#{j}) = {mse_(intrs.x_rec_disc_zμ[0][i], intrs.x_rec_disc_zμ[0][j]):.3f}\n'
                 for j in inspect if i != j]))
 
         def euc_dist(x: Array, A: Array) -> Array:
@@ -329,11 +361,14 @@ def explore_jats(profiles: JATSModelOutput,
         explr_x = euc_dist(intrs.x[i], profiles.x)
         sortd_x = np.argsort(explr_x)
 
-        explr_x_recon = euc_dist(intrs.x_rec_cont[i], profiles.x_rec_cont)
+        explr_x_recon = euc_dist(intrs.x_rec_cont_zμ[i], profiles.x_rec_cont_zμ)
         sortd_x_recon = np.argsort(explr_x_recon)
 
-        explr_z = euc_dist(intrs.z_normalized[i], profiles.z_normalized)
-        sortd_z = np.argsort(explr_z)
+        explr_zμ = euc_dist(intrs.zμ[i], profiles.zμ)
+        sortd_zμ = np.argsort(explr_zμ)
+
+        explr_fzμ = euc_dist(intrs.fzμ[i], profiles.fzμ)
+        sortd_fzμ = np.argsort(explr_fzμ)
 
         intrs_fa_z = fa.transform(intrs.x)
         intrs_fa_x_rec = fa.inverse_transform(intrs_fa_z)
@@ -356,260 +391,355 @@ def explore_jats(profiles: JATSModelOutput,
         def x100(x: Array) -> Array:
             return np.round(100 * x).astype(int)
 
-        explr_type_z = euc_dist(intrs.z_normalized[i], profiles.z_norm_refs)
-        sortd_type_z = np.argsort(explr_type_z)
-        explr_type_fa_z = euc_dist(intrs_fa_z[i], fa.z_norm_refs)
-        sortd_type_fa_z = np.argsort(explr_type_fa_z)
-        explr_type_pca_z = euc_dist(intrs_pca_z[i], pca.z_norm_refs)
-        sortd_type_pca_z = np.argsort(explr_type_pca_z)
+        def get_types(intrs_y_probs: Opt[Array], postfix: str='',
+                      transform: Callable[[Array], Array]=lambda x: x + 1) -> None:
+            assert intrs_y_probs is not None
+            n_ = intrs_y_probs.shape[1]
+            sorted_y = np.array(list(reversed(np.argsort(intrs_y_probs[i]))))
+            dict_ = {
+                f'type y-nn (of {n_})': transform(sorted_y[:n_]),
+                f'prob{postfix} y': x100(intrs_y_probs[i][sorted_y])[:n_],
+            }
+            try:
+                lg.display(pd.DataFrame(dict_))
+            except ValueError:
+                lg.print(dict_)
 
         if profiles.y_probs is not None:
-            if intrs.y_probs is None:
-                raise RuntimeError
-            n = intrs.y_probs.shape[1]
-            sorted_y = np.array(list(reversed(np.argsort(intrs.y_probs[i]))))
-            lg.display(pd.DataFrame({
-                f'type y-nn (of {n})': sorted_y[:n] + 1,
-                'prob y': x100(intrs.y_probs[i][sorted_y])[:n],
-            }))
+            get_types(intrs.y_probs)
+        if profiles.y_probs2 is not None:
+            get_types(intrs.y_probs2, '2')
+
+        def new_types(x: Array) -> Array: return np.array([i + 1 if (i < 16) else -(i - 15) for i in x])
+        if profiles.y_probs32 is not None:
+            get_types(intrs.y_probs32, '32', new_types)
+
         lg.display(pd.DataFrame({
-            'type ref-nn': sortd_type_z[:10] + 1,
-            'z 100euc': x100(explr_type_z[sortd_type_z])[:10],
-            'type fa': sortd_type_fa_z[:10] + 1,
-            'fa z 100euc': x100(explr_type_fa_z[sortd_type_fa_z])[:10],
-            'type pca': sortd_type_pca_z[:10] + 1,
-            'pca z 100euc': x100(explr_type_pca_z[sortd_type_pca_z])[:10],
-        }))
-        lg.display(pd.DataFrame({
-            'idx1': sortd_x[:10],
+            'idx1': ids[sortd_x[:10]],
             'x 100euc': x100(explr_x[sortd_x])[:10],
             'tal1': types[sortd_x][:10],
             'self1': types_self[sortd_x][:10],
-        }))
-        lg.display(pd.DataFrame({
-            'idx2': sortd_x_recon[:10],
+            'idx2': ids[sortd_x_recon[:10]],
             'x_recon 100euc': x100(explr_x_recon[sortd_x_recon])[:10],
             'tal2': types[sortd_x_recon][:10],
             'self2': types_self[sortd_x_recon][:10],
-            'idx3': sortd_z[:10],
-            'z 100euc': x100(explr_z[sortd_z])[:10],
-            'tal3': types[sortd_z][:10],
-            'self3': types_self[sortd_z][:10],
         }))
         lg.display(pd.DataFrame({
-            'idx4': sortd_pca_z[:10],
+            'idx3': ids[sortd_zμ[:10]],
+            'zμ 100euc': x100(explr_zμ[sortd_zμ])[:10],
+            'tal3': types[sortd_zμ][:10],
+            'self3': types_self[sortd_zμ][:10],
+            'idx3a': ids[sortd_fzμ[:10]],
+            'fzμ 100euc': x100(explr_fzμ[sortd_fzμ])[:10],
+            'tal3a': types[sortd_fzμ][:10],
+            'self3a': types_self[sortd_fzμ][:10],
+        }))
+        lg.display(pd.DataFrame({
+            'idx4': ids[sortd_pca_z[:10]],
             'pca z 100euc': x100(explr_pca_z[sortd_pca_z])[:10],
             'tal4': types[sortd_pca_z][:10],
             'self4': types_self[sortd_pca_z][:10],
-            'idx5': sortd_pca_x_rec[:10],
+            'idx5': ids[sortd_pca_x_rec[:10]],
             'pca x_rec 100euc': x100(explr_pca_x_rec[sortd_pca_x_rec])[:10],
             'tal5': types[sortd_pca_x_rec][:10],
             'self5': types_self[sortd_pca_x_rec][:10],
         }))
         lg.display(pd.DataFrame({
-            'idx6': sortd_fa_z[:10],
+            'idx6': ids[sortd_fa_z[:10]],
             'fa z 100euc': x100(explr_fa_z[sortd_fa_z])[:10],
             'tal6': types[sortd_fa_z][:10],
             'self6': types_self[sortd_fa_z][:10],
-            'idx7': sortd_fa_x_rec[:10],
+            'idx7': ids[sortd_fa_x_rec[:10]],
             'fa x_rec 100euc': x100(explr_fa_x_rec[sortd_fa_x_rec])[:10],
             'tal7': types[sortd_fa_x_rec][:10],
             'self7': types_self[sortd_fa_x_rec][:10],
         }))
 
-    lg.display(pd.DataFrame(intrs.z_normalized))
+    float_format = pd.options.display.float_format
+    pd.options.display.float_format = '{:,.2f}'.format
+    lg.print('fp(zμ):')
+    lg.display(pd.DataFrame(intrs.fzμ))
+    lg.print('zμ:')
+    lg.display(pd.DataFrame(intrs.zμ))
+    lg.print('σ:')
+    lg.display(pd.DataFrame(intrs.σ))
+    if intrs.zμ_new is not None:
+        lg.print('zμ_new:')
+        pd.set_option('display.max_columns', None)
+        lg.display(pd.DataFrame(intrs.zμ_new))
+    if intrs.zμ_rec is not None:
+        lg.print('zμ_rec:')
+        lg.display(pd.DataFrame(intrs.zμ_rec))
+    lg.print(profiles.log)
+    pd.options.display.float_format = float_format
 
 
-def log_iter(model: Union[VariationalAutoencoder, SVI], nll: BaseWeightedLoss, trans: Transforms,
-             test_data: TestArraysToTensors, trim: Opt[TrimLoss], loader: TrainLoader) -> Tuple[str, Dict[str, Any]]:
+def log_iter(model: Union[VariationalAutoencoder, SVI], nll: BaseWeightedLoss,
+             trans: Transforms, test_data: TestArraysToTensors, loader: TrainLoader,
+             batch: Batch) -> Tuple[str, Dict[str, Any]]:
     def prepare(tpl: Tuple[Tensor, Tensor]) -> LstTpl:
         x_rec_cont, x_rec_sample = tpl
         return [('', x_rec_cont), ('', trans.round_x_rec_tens(x_rec_cont)), ('', x_rec_sample)]
 
-    u, u_nll, weight_vec_u, weight_mat_u = test_data.get_test_tensors()
-    x, x_nll, weight_vec, weight_mat, y = test_data.get_test_labelled_tensors()
-    # x_lrn, weight_vec_lrn, y_lrn = test_data.get_learn_labelled_tensors()
-    # x_lrn_rand1, weight_vec_lrn_rand1, y_lrn_rand1 = test_data.get_rand_learn_labelled_tensors()
-    # x_lrn_rand2, weight_vec_lrn_rand2, y_lrn_rand2 = test_data.get_rand_learn_labelled_tensors()
+    b = batch
+    u, u_nll, w_vec_u, w_mat_u = test_data.get_test_tensors()
+    x, x_nll, w_vec, _, y, type_ = test_data.get_test_labelled_tensors()
+    assert (type_ > 0).all() and (len(type_.unique()) == 16)
+    u_r1, u_nll_r1, w_vec_u_r1, _ = test_data.get_random_learn_tensors()
+    u_r2, u_nll_r2, w_vec_u_r2, _ = test_data.get_random_learn_tensors()
+    x_r1, _, w_vec_r1, _, y_r1, _ = test_data.get_random_learn_labelled_tensors()
+    x_r2, _, w_vec_r2, _, y_r2, _ = test_data.get_random_learn_labelled_tensors()
 
-    def wμ(x_: Tensor, weight_vec_: Opt[Tensor]) -> float:
-        if weight_vec_ is None:
+    def wμ(x_: Tensor, w_vec_: Opt[Tensor]=None) -> float:
+        if w_vec_ is None:
             return x_.mean().item()
-        return (x_ * weight_vec_[:, 0]).mean().item()
-
-    weight_vec_u_s = weight_vec_u.repeat(y.shape[1], 1) if (weight_vec_u is not None) else None
-
-    def wμ_x(x_: Tensor) -> float: return wμ(x_, weight_vec)
-    def wμ_u(u_: Tensor) -> float: return wμ(u_, weight_vec_u)
-    def wμ_u_s(u_: Tensor) -> float: return wμ(u_, weight_vec_u_s)
+        return (x_ * w_vec_[:, 0]).mean().item()
 
     svi: Opt[SVI] = None
+    vae: VariationalAutoencoder
+    kld: KLDLoss
+    tckld: Opt[BetaTCKLDLoss] = None
     if isinstance(model, SVI):
         svi = model
-        tc_kld = svi.model.tc_kld
+        kld = svi.model.kld
         if not isinstance(svi.model, DeepGenerativeModel):
             raise ValueError('SVI().model should be DeepGenerativeModel')
+        vae = svi.model
     elif isinstance(model, VariationalAutoencoder):
-        tc_kld = model.tc_kld
+        kld = model.kld
+        vae = model
     else:
         raise NotImplementedError
+    if isinstance(kld, BetaTCKLDLoss):
+        tckld = kld
     adgm: Opt[AuxiliaryDeepGenerativeModel] = None
+    vae_cls: Opt[VAEClassifyMeta] = None
     if isinstance(svi, SVI):
         if isinstance(svi.model, AuxiliaryDeepGenerativeModel):
             adgm = svi.model
+    else:
+        if isinstance(vae, VAEClassifyMeta):
+            vae_cls = vae
 
-    if tc_kld is not None:
-        tc_kld.set_verbose(True)
+    kld.set_verbose(True)
     if adgm is not None:
         adgm.set_verbose(True)
+
+    assert isinstance(vae, VariationalAutoencoder)
+    pass_sex = Passer(vae.decoder)
 
     # Losses ------------------------------------------------------------------
     losses: Dict[str, float] = dict()
 
-    def pop_tc_kld_to_losses(losses_: Dict[str, float], wμ_: Callable[[Tensor], float],
-                             postfix: str = '') -> Dict[str, float]:
-        if tc_kld is not None:
-            if svi is None:
-                raise RuntimeError
-            kld_1, kld_0, mi, tc, dw = tc_kld.stored.pop()
-            losses_ = {f'KLD1{postfix}': wμ_(svi.sampler.__call__(kld_1)),
-                       f'KLD0{postfix}': wμ_(svi.sampler.__call__(kld_0)), **losses_}
-            if (mi is not None) and (tc is not None) and (dw is not None):
-                losses_ = {f'MI{postfix}': wμ_(svi.sampler.__call__(mi)),
-                           f'TC{postfix}': wμ_(svi.sampler.__call__(tc)),
-                           f'DW{postfix}': wμ_(svi.sampler.__call__(dw)), **losses_}
+    def sampler(x_: Tensor) -> Tensor:
+        if svi is not None:
+            return svi.sampler.__call__(x_)
+        return x_
+
+    def tc_kld_to_losses(verbose: Dict[str, Tensor], losses_: Dict[str, float],
+                         postfix: str = '') -> Dict[str, float]:
+        v = verbose
+        if tckld is not None:
+            kld_0 = verbose['kld_unmod']
+            assert kld_0 is not None
+            losses_ = {f'KLD_unmod{postfix}': wμ(sampler(kld_0)), **losses_}
+
+            tckld_, mi, tc, dw = v.get('tckld'), v.get('mi'), v.get('tc'), v.get('dw')
+            if (tckld_ is not None) and (mi is not None) and (tc is not None) and (dw is not None):
+                losses_ = {f'TCKLD{postfix}': wμ(sampler(tckld_)),
+                           f'MI{postfix}': wμ(sampler(mi)),
+                           f'TC{postfix}': wμ(sampler(tc)),
+                           f'DW{postfix}': wμ(sampler(dw)), **losses_}
         return losses_
 
-    def pop_adgm_to_losses(losses_: Dict[str, float], wμ_: Callable[[Tensor], float],
-                           postfix: str = '') -> Dict[str, float]:
+    def adgm_to_losses(verbose: Dict[str, Tensor], losses_: Dict[str, float],
+                       postfix: str = '') -> Dict[str, float]:
         if adgm is not None:
-            if svi is None:
-                raise RuntimeError
-            kld_z, kld_a = adgm.stored.pop()
-            losses_ = {f'KLDz{postfix}': wμ_(svi.sampler.__call__(kld_z)),
-                       f'KLDa{postfix}': wμ_(svi.sampler.__call__(kld_a)), **losses_}
+            assert svi is not None
+            kld_z = verbose['adgm_kld_z']
+            kld_a = verbose['adgm_kld_a']
+            assert (kld_z is not None) and (kld_a is not None)
+            losses_ = {f'KLDz{postfix}': wμ(svi.sampler.__call__(kld_z)),
+                       f'KLDa{postfix}': wμ(svi.sampler.__call__(kld_a)), **losses_}
         return losses_
 
-    def assert_tc_kld_empty() -> None:
-        if tc_kld is not None:
-            if tc_kld.stored:
-                raise AssertionError(f'len(tc_kld.stored) == {len(tc_kld.stored)}')
+    def u_to_losses(losses_: Dict[str, float], u_: Tensor, u_nll_: Opt[Tensor], w_vec_: Opt[Tensor],
+                    w_mat_u_: Opt[Tensor], postfix: str='_u', unmod_kld: bool=True) -> Tuple[
+        Dict[str, float], Tuple[Tensor, ...], Tensor, Dict[str, Tensor]
+    ]:
+        """
+        I understand that this is not a proper NELBO for unlabelled data.
+        But for now it will do.
 
-    def assert_adgm_empty() -> None:
-        if adgm is not None:
-            if adgm.stored:
-                raise AssertionError(f'len(adgm.stored) == {len(adgm.stored)}')
+        It's a correct NELBO for simple VAE though.
+        """
+        _, y_u_, qz_params_u_, _ = get_z_ymax(x=u_, y=None, model=vae)
 
-    assert_tc_kld_empty()
-    assert_adgm_empty()
+        if svi is not None:
+            with kld.unmodified_kld():
+                nelbo_u_, _, _, verb_ = svi.__call__(x=u_, y=None, weight=w_mat_u_, x_nll=u_nll_)
+                u_rec_params_, kld_u_, _ = svi.model.__call__(u_, y_u_)
+            nelbo_ = wμ(nelbo_u_)
+        else:
+            if unmod_kld:
+                with kld.unmodified_kld():
+                    u_rec_params_, kld_u_, verb_ = vae.__call__(u_, u_)
+            else:
+                u_rec_params_, kld_u_, verb_ = vae.__call__(u_, u_)
+            nelbo_ = 0.
+
+        nlps_ = pass_sex.neg_log_p_passthr_x
+        neg_log_p_sex_ = nlps_ if isinstance(nlps_, int) else wμ(nlps_)
+
+        kld_u = wμ(kld_u_, w_vec_)
+        nll_u = wμ(
+            nll.__call__(x_params=u_rec_params_, target=u_nll_ if (u_nll_ is not None) else u_, weight=w_mat_u_),
+            w_vec_)
+
+        if svi is None:
+            nelbo_ = nll_u + kld_u
+
+        args = 'x,s' if (neg_log_p_sex_ != 0) else 'x'
+        losses_ = {f'NELBO({args}){postfix}': nelbo_ + neg_log_p_sex_, f'NLL{postfix}': nll_u,
+                   f'KLD{postfix}': kld_u, **losses_}
+
+        return losses_, qz_params_u_, u_rec_params_, verb_
+
+    def classify_(x_: Tensor, use_zμ: bool=False) -> Tensor:
+        cls_: Union[DeepGenerativeModel, VAEClassifyMeta]
+        if svi is not None:
+            cls_ = svi.model
+        elif vae_cls is not None:
+            cls_ = vae_cls
+        else:
+            raise RuntimeError
+
+        probs_, _ = cls_.classify(x_) if not use_zμ else cls_.classify_deterministic(x_)
+        return probs_
+
+    def accuracy_(logits_or_probs: Tensor, target: Tensor) -> Tensor:
+        if svi is not None:
+            return svi.accuracy(logits_or_probs, target)
+        if vae_cls is not None:
+            return vae_cls.classifier.accuracy(logits_or_probs, target)
+        raise RuntimeError
 
     if svi is not None:
         dgm: DeepGenerativeModel = svi.model
-        N_u, N_l = u.shape[0], x.shape[0]
-        _N_l, _N_u = svi.N_l, svi.N_u
-        svi.set_consts(N_l=N_l, N_u=N_u)
+        svi.set_consts(β=1)
 
         # Labelled x, y and L
-        if tc_kld is not None:
-            tc_kld.set_dataset_size(loader.labelled_dataset_size)
-        nelbo, cross_entropy_, probs = svi.__call__(x=x, y=y, weight=weight_mat, x_nll=x_nll)
-        L, cross_entropy = wμ_x(nelbo), wμ_x(cross_entropy_)
+        if tckld is not None:
+            tckld.set_dataset_size(loader.labelled_dataset_size)
+        assert (b.x is not None) and (b.y is not None)
+        nelbo, cross_entropy_, _, verb = svi.__call__(x=b.x, y=b.y, weight=b.w_mat, x_nll=b.x_nll)
+        L, cross_entropy = wμ(nelbo), wμ(cross_entropy_)
 
-        if (adgm is not None) and (tc_kld is not None) and (len(tc_kld.stored) > 1):
-            losses = pop_tc_kld_to_losses(losses, wμ_x, '_a')
-        losses = pop_tc_kld_to_losses(losses, wμ_x)
-        losses = pop_adgm_to_losses(losses, wμ_x)
-        assert_tc_kld_empty()
-        assert_adgm_empty()
+        losses = tc_kld_to_losses(verb, losses)
+        losses = adgm_to_losses(verb, losses)
 
-        z_x, y_x, _, kld_, _ = get_zμ_ymax(x=x, model=dgm)
-        x_rec_params = dgm.sample(z_x, y_x)
-        kld = wμ_x(kld_)
-        nll_ = wμ_x(nll.__call__(x_params=x_rec_params, target=x_nll, weight=weight_mat))
-        losses = dict(NLL=nll_, NELBO=L, KLD_mod=kld, **losses)
+        def lbl_t_dict(svi_: SVI, y_: Tensor, postf: str='') -> Dict[str, float]:
+            with dgm.kld.unmodified_kld():
+                nelbo_x_, _, _, _ = svi_.__call__(x=x, y=y_, weight=None, x_nll=x_nll)
+                nelbo_x = wμ(nelbo_x_)
+                x_rec_params, kld_t_, _ = dgm.__call__(x, dgm.classifier.transform_y(y_))
+                kld_t = wμ(kld_t_, w_vec)
+            nlps = pass_sex.neg_log_p_passthr_x
+            neg_log_p_sex = nlps if isinstance(nlps, int) else wμ(nlps)
+
+            nll_t = wμ(nll.__call__(x_params=x_rec_params, target=x_nll, weight=None), w_vec)
+            return {f'NELBO_t{postf}': nelbo_x + neg_log_p_sex, f'NLL_t{postf}': nll_t, f'KLD_t{postf}': kld_t}
+
+        x_y_t_losses = lbl_t_dict(svi, y, postf='_l')
+        _, yx, _, _ = get_z_ymax(x=x, y=None, model=dgm, verbose=True)
+        x_yx_t_losses = lbl_t_dict(svi, yx, postf='_l_nn')
+
+        losses = dict(**x_y_t_losses, **x_yx_t_losses, L=L, **losses)
 
         # Unlabelled u and U:
-        if tc_kld is not None:
-            tc_kld.set_dataset_size(loader.unlabelled_dataset_size)
-            while tc_kld.stored:
-                tc_kld.stored.pop()
-        if adgm is not None:
-            while adgm.stored:
-                adgm.stored.pop()
-        assert_tc_kld_empty()
-        assert_adgm_empty()
+        if tckld is not None:
+            tckld.set_dataset_size(loader.unlabelled_dataset_size)
 
-        nelbo_u, _, _ = svi.__call__(x=u, weight=weight_mat_u, x_nll=u_nll)
-        U = wμ_u(nelbo_u)
+        nelbo_u, _, _, verb = svi.__call__(x=b.u, weight=b.w_mat_u, x_nll=b.u_nll)
+        U = wμ(nelbo_u)
 
-        if (adgm is not None) and (tc_kld is not None) and (len(tc_kld.stored) > 1):
-            losses = pop_tc_kld_to_losses(losses, wμ_u_s, '_ua')
-        losses = pop_tc_kld_to_losses(losses, wμ_u_s, '_u')
-        losses = pop_adgm_to_losses(losses, wμ_u_s, '_u')
-        assert_tc_kld_empty()
-        assert_adgm_empty()
+        losses = tc_kld_to_losses(verb, losses, '_u')
+        losses = adgm_to_losses(verb, losses, '_u')
 
-        z_u, y_u, qz_params_u, kld_u_, _ = get_zμ_ymax(x=u, model=dgm)
-        kld_u = wμ_u(kld_u_)
-        u_rec_params = dgm.sample(z_u, y_u)
-        nll_u = wμ_u(nll.__call__(x_params=u_rec_params, target=u_nll, weight=weight_mat_u))
-        losses = dict(NLL_u=nll_u, NELBO_u=U, KLD_mod_u=kld_u, **losses)
-
-        if tc_kld is not None:
-            while tc_kld.stored:
-                tc_kld.stored.pop()
-        if adgm is not None:
-            while adgm.stored:
-                adgm.stored.pop()
-        assert_tc_kld_empty()
-        assert_adgm_empty()
+        losses = dict(U=U, **losses)
+        losses, qz_params_u, u_rec_params, _ = u_to_losses(losses, u, u_nll, w_vec_u, None, postfix='_t_u')
 
         # J_α:
         J_α = L + cross_entropy * svi.α + U
-        acc = svi.accuracy(probs, y)
 
-        losses = dict(WAcc=wμ_x(acc), Acc=acc.mean().item(), J_α=J_α, CE=cross_entropy,
-                      # WAccLrn=wμ(svi.accuracy(svi.model.classify(x_lrn), y_lrn), weight_vec_lrn),
-                      # WAccLrnR1=wμ(svi.accuracy(svi.model.classify(x_lrn_rand1), y_lrn_rand1), weight_vec_lrn_rand1),
-                      # WAccLrnR2=wμ(svi.accuracy(svi.model.classify(x_lrn_rand2), y_lrn_rand2), weight_vec_lrn_rand2),
-                      **losses)
-        svi.set_consts(N_l=_N_l, N_u=_N_u)
+        losses, _, _, _ = u_to_losses(losses, u_r1, u_nll_r1, w_vec_u_r1, None, postfix='_r1_u')
+        losses, _, _, _ = u_to_losses(losses, u_r2, u_nll_r2, w_vec_u_r2, None, postfix='_r2_u')
 
+        losses = dict(J_α=J_α, CE=cross_entropy, **losses)
     else:
-        vae: VariationalAutoencoder = model
-        z_u, y_u, qz_params_u, kld_, _ = get_zμ_ymax(x=u, model=vae)
-        u_rec_params = vae.sample(z_u, y_u)
-        kld = wμ_u(kld_)
-        nll_ = wμ_u(nll.__call__(x_params=u_rec_params, target=u_nll, weight=weight_mat_u))
-        nelbo_ = nll_ + kld
+        losses, _, _, verb = u_to_losses(losses, b.u, b.u_nll, None, b.w_mat_u, postfix='',
+                                         unmod_kld=False)
+        losses = tc_kld_to_losses(verb, losses)
+        losses, _, _, _ = u_to_losses(losses, u_r1, u_nll_r1, w_vec_u_r1, None, postfix='_r1_u')
+        losses, _, _, _ = u_to_losses(losses, u_r2, u_nll_r2, w_vec_u_r2, None, postfix='_r2_u')
+        losses, qz_params_u, u_rec_params, _ = u_to_losses(losses, u, u_nll, w_vec_u, None, postfix='_t')
 
-        losses = pop_tc_kld_to_losses(losses, wμ_u)
-        assert_tc_kld_empty()
+    def get__acc__acc_per_type(probs: Tensor, postf: str=''):
+        acc_ = accuracy_(probs, y)
 
-        losses = dict(NLL=nll_, NELBO=nelbo_,  KLD_mod=kld, **losses)
+        acc_per_type_ = {f'{s}{j}{postf}': accuracy_(probs[maskj & sex], y[maskj & sex]).mean().item()
+                         for j, maskj in [(i, type_ == i) for i in range(1, 17)]
+                         for s, sex in (('f', x[:, 0] < 0.5), ('m', x[:, 0] > 0.5))}
+        acc_per_type_[f'Av{postf}'] = sum(acc_per_type_.values()) / len(acc_per_type_)
+        return acc_, acc_per_type_
+
+    if (svi is not None) or (vae_cls is not None):
+        # ------------------------------------------------------------------------
+        cog_funcs_mse_u: float = 0
+        cog_funcs_mse_u_locality: float = 0
+        if vae_cls is not None:
+            if isinstance(vae_cls.classifier, ClassifierPassthrJATS24KhCFBase):
+                _cf_cls: ClassifierPassthrJATS24KhCFBase = vae_cls.classifier
+                _z_u_ext, _μ_u_ext = vae_cls.get_z_μ(u)
+                _cog_funcs_mse_u, _ = _cf_cls.get__mse__reg_loss(_μ_u_ext)
+                _cog_funcs_mse_u_locality, _ = _cf_cls.get__mse__reg_loss(_z_u_ext, _μ_u_ext)
+                cog_funcs_mse_u = wμ(_cog_funcs_mse_u, w_vec_u)
+                cog_funcs_mse_u_locality = wμ(_cog_funcs_mse_u_locality, w_vec_u)
+        # ------------------------------------------------------------------------
+
+        acc, acc_per_type = get__acc__acc_per_type(classify_(x))
+        acc_μ, acc_μ_per_type = get__acc__acc_per_type(classify_(x, use_zμ=True), postf='μ')
+
+        losses = dict(
+            CF_MSE_t=cog_funcs_mse_u,
+            CF_MSE_t_loc=cog_funcs_mse_u_locality,
+            # wAcc_t_m4=acc_per_type['m4'], minWAcc_t_no_m4=min(v for k, v in acc_per_type.items() if k != 'm4'),
+            minWAcc_t=min(acc_per_type.values()),
+            wAcc_t=wμ(acc, w_vec), Acc_t=wμ(acc),
+            wAcc_r1=wμ(accuracy_(classify_(x_r1), y_r1), w_vec_r1),
+            wAcc_μ_r2=wμ(accuracy_(classify_(x_r2, use_zμ=True), y_r2), w_vec_r2),
+            minWAcc_μ_t=min(acc_μ_per_type.values()),
+            wAcc_μ_t=wμ(acc_μ, w_vec),
+            **acc_per_type, **acc_μ_per_type, **losses)
 
     μ: Opt[Tensor] = None
     log_σ: Opt[Tensor] = None
-    if len(qz_params_u) == 2:
-        μ, log_σ = qz_params_u
-        if trim is not None:
-            trim__ = trim.__call__(μ=μ, log_σ=log_σ)
-            trim_ = trim__ if isinstance(trim__, int) else trim__.item()
-            losses['Trim'] = trim_
+    if (len(qz_params_u) == 2) or ((len(qz_params_u) == 4) and (adgm is not None)):
+        μ, log_σ = qz_params_u[:2]
 
     # Test ----------------------------------------------------------------
     u_rec_det = prepare(nll.x_recon(u_rec_params))
 
     u_rec_list: LstTpl = [('μ', 0)]
     u_rec_list += u_rec_det
-    if weight_vec_u is None:
-        weight_vec_x_mat_u = weight_mat_u
-    elif weight_mat_u is None:
-        weight_vec_x_mat_u = weight_vec_u
+    if w_vec_u is None:
+        weight_vec_x_mat_u = w_mat_u
+    elif w_mat_u is None:
+        weight_vec_x_mat_u = w_vec_u
     else:
-        weight_vec_x_mat_u = weight_vec_u * weight_mat_u
+        weight_vec_x_mat_u = w_vec_u * w_mat_u
 
-    u_weight_list_: LstTplOpt = [('±TW:', weight_vec_x_mat_u), ('TW:', weight_vec_u), ('¬W:', 1)]
+    u_weight_list_: LstTplOpt = [('±TW:', weight_vec_x_mat_u), ('TW:', w_vec_u), ('¬W:', 1)]
     u_weight_list: LstTpl = [s for s in u_weight_list_ if s[1] is not None]  # type: ignore
 
     # MSE and BCE:
@@ -640,10 +770,7 @@ def log_iter(model: Union[VariationalAutoencoder, SVI], nll: BaseWeightedLoss, t
     )
     dic = dict(test_losses=losses, KLD_vec=kld_vec, mse_bce_test=mse_bce_test)
 
-    assert_tc_kld_empty()
-    assert_adgm_empty()
-    if tc_kld is not None:
-        tc_kld.set_verbose(False)
+    kld.set_verbose(False)
     if adgm is not None:
         adgm.set_verbose(False)
     return string, dic

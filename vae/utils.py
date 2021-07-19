@@ -1,17 +1,10 @@
-from typing import Tuple, Union, List, Dict
+from typing import Tuple, Union, Dict
 import numpy as np
 # noinspection PyPep8Naming
 from numpy import ndarray as Array
 from torch import Tensor
-from scipy.stats import gaussian_kde
-from kiwi_bugfix_typechecker.nn import Module
 
 ε = 10**-8
-
-
-class OutputChecker:
-    def check(self, model: Module, log_stats: List[Dict]) -> bool:  # pylint: disable=unused-argument,no-self-use
-        return True
 
 
 def ε_trim_0__1_inplace(x: Union[Array, Tensor]) -> Union[Array, Tensor]:
@@ -70,21 +63,8 @@ def wmse_wnll_all(x_recon: Union[Array, Tensor], x: Union[Array, Tensor],
     return float(np.average(d, axis=0, **weight_vec_kw))
 
 
-def norm_weights_matrix(weights_vec: Array, weights_mat: Array) -> Array:
-    return weights_matrix(weights_vec / np.sum(weights_vec) * len(weights_vec), weights_mat)
-
-
-def density_extremum(x: Array) -> Array:
-    """
-    :param x: samples of the shape (n_samples, m_features)
-    :return: point in which density is max; of the shape (m_features,)
-    """
-    min_x, max_x = np.min(x, axis=0), np.max(x, axis=0)
-    linsp = [np.linspace(min_x[i], max_x[i], num=200) for i in range(x.shape[1])]
-    max_y_args = [linsp[i][
-                     np.argmax(gaussian_kde(x[:, i], bw_method='scott').__call__(linsp[i]))
-                 ] for i in range(x.shape[1])]
-    return np.array(max_y_args)
+def norm_weights_matrix(weights_vec: Array, shape_ref_weights_mat: Array) -> Array:
+    return weights_matrix(weights_vec / np.sum(weights_vec) * len(weights_vec), shape_ref_weights_mat)
 
 
 def categ_to_one_hot(x: Array) -> Array:

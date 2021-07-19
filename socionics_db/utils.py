@@ -92,8 +92,9 @@ class Transforms:
         return 2 * np.sign(profiles - 3) + 3
 
 
-def get_weight(types_tal_sex: Array) -> Array:
-    _, counts = np.unique(types_tal_sex, return_counts=True)
+def get_weight(types_sex: Array) -> Array:
+    uni, counts = np.unique(types_sex, return_counts=True)
     if len(counts) != 32:
-        raise ValueError("types_tal_sex doesn't have all 32 types samples")
-    return (1. / counts)[types_tal_sex - 1]
+        raise ValueError(
+            f"types_tal_sex doesn't have all 32 types samples: {len(counts)} ({np.sum(counts)}, {uni}, {counts})")
+    return (1. / counts)[types_sex - 1]

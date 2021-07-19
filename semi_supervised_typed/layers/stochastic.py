@@ -1,10 +1,8 @@
-from typing import Tuple
-import math
+from typing import Tuple, List
 import torch as tr
-from torch import Tensor
+from torch import Tensor, nn
 from beta_tcvae_typed import Normal, Laplace, Distrib
 
-from kiwi_bugfix_typechecker import nn, func
 from .stochastic_types import BaseGaussianMerge, ModuleXToXTupleYi, XTupleYi
 
 δ = 1e-8
@@ -51,19 +49,6 @@ class GaussianSample(BaseSample):
         ε = tr.randn(μ.size(), dtype=μ.dtype, device=μ.device)
         z = tr.exp(log_σ) * ε + μ
         return z
-
-
-class GaussianSampleTrim(GaussianSample):
-    def __init__(self, in_features: int, out_features: int, min_σ: float=(3 * 6)**-1, max_abs_μ: float=3):
-        super(GaussianSampleTrim, self).__init__(in_features=in_features, out_features=out_features)
-        self.min_log_σ = math.log(abs(min_σ))
-        self.max_abs_5μ_div_2 = 2.5 * abs(max_abs_μ)
-
-    def μ_log_σ(self, x: Tensor) -> Tuple[Tensor, Tensor]:
-        μ, log_σ = super(GaussianSampleTrim, self).μ_log_σ(x)
-        μ = (tr.sigmoid(μ) - 0.5) * self.max_abs_5μ_div_2
-        log_σ = func.softplus(log_σ - self.min_log_σ)
-        return μ, log_σ
 
 
 class GaussianMerge(BaseGaussianMerge):
@@ -131,19 +116,20 @@ class GumbelSoftmax(BaseSample):
 
 
 class Sample(BaseSample):
-    params: nn.Linear
+    params: List[nn.Linear]
     dist: Distrib
 
     def __init__(self, in_features: int, out_features: int, dist: Distrib=Normal()):
         super(Sample, self).__init__(in_features, out_features)
-        self.params = nn.Linear(in_features, out_features * dist.nparams)
+        params: List[nn.Linear] = [nn.Linear(in_features, out_features) for _ in range(dist.nparams)]
+        # noinspection PyTypeChecker
+        self.params = nn.ModuleList(params)  # type: ignore
         self.dist = dist
 
     def forward_(self, x: Tensor) -> XTupleYi:
-        params = self.params.__call__(x)
-        z = self.dist.sample(params=params)
-        params_ = self.dist.check_inputs(params=params)
-        return z, params_
+        params = tuple(param.__call__(x) for param in self.params)
+        z = self.dist.rsample(params=params)
+        return z, params
 
 
 class NormalSample(Sample):

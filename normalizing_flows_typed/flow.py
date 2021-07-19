@@ -28,8 +28,10 @@ from typing import Tuple, List, Dict, Union
 from abc import abstractmethod
 import torch as tr
 from torch import Tensor
+from torch import nn
 
-from kiwi_bugfix_typechecker import func, nn
+from kiwi_bugfix_typechecker import nn as nn_
+from kiwi_bugfix_typechecker import func
 from .types import ModuleZToXY, SequentialZToXY
 
 δ = 1e-8
@@ -55,7 +57,7 @@ class NormalizingFlows(Flow):
         Forked from github.com/wohlert/semi-supervised-pytorch
         """
         super(NormalizingFlows, self).__init__()
-
+        flows_: List[Flow]
         if (flows is None) and (dim is not None):
             flows_ = [PlanarNormalizingFlow(dim=dim) for _ in range(16)]
         elif flows:
@@ -65,7 +67,7 @@ class NormalizingFlows(Flow):
 
         flows__ = nn.ModuleList(flows_)
         # noinspection PyTypeChecker
-        self.flows = flows__
+        self.flows = flows__  # type: ignore
 
     def forward_(self, z: Tensor) -> Tuple[Tensor, Tensor]:
         z, sum_log_abs_det_jacobian = self.flows[0].__call__(z)
@@ -102,13 +104,14 @@ class SequentialFlow(SequentialZToXY):
         """
         :return: The output tensor and the log-det-Jacobian of this transformation.
         """
-        log_det_jacobian: Union[int, Tensor] = 0
+        # log abs det jacobian:
+        ladetj: Union[int, Tensor] = 0
         for module in self._modules.values():
-            fz, log_det_jacobian_ = module.__call__(z)
-            log_det_jacobian = log_det_jacobian_ + log_det_jacobian
+            fz, ladetj_ = module.__call__(z)
+            ladetj = ladetj_ + ladetj
             z = fz
-        if not isinstance(log_det_jacobian, int):
-            return z, log_det_jacobian
+        if not isinstance(ladetj, int):
+            return z, ladetj
         raise RuntimeError('Presumably empty Sequential')
 
     @abstractmethod
@@ -128,9 +131,9 @@ class PlanarNormalizingFlow(Flow):
         """
         super(PlanarNormalizingFlow, self).__init__()
         self.dim = dim
-        self.u = nn.Parameter(tr.randn(dim))
-        self.w = nn.Parameter(tr.randn(dim))
-        self.b = nn.Parameter(tr.ones(1))
+        self.u = nn_.Parameter(tr.randn(dim))
+        self.w = nn_.Parameter(tr.randn(dim))
+        self.b = nn_.Parameter(tr.ones(1))
 
     def forward_(self, z: Tensor) -> Tuple[Tensor, Tensor]:
         u, w, b = self.u, self.w, self.b

@@ -26,7 +26,7 @@ SOFTWARE.
 from typing import List, Tuple
 import torch as tr
 from torch import Tensor
-from kiwi_bugfix_typechecker import nn
+from torch import nn
 from kiwi_bugfix_typechecker.distrib import Distribution
 from .flows import Flow
 from .types import ModuleXToXYZ
@@ -40,7 +40,7 @@ class NormalizingFlowModel(ModuleXToXYZ):
         self.prior = prior
         flows_ = nn.ModuleList(flows)
         # noinspection PyTypeChecker
-        self.flows = flows_
+        self.flows = flows_  # type: ignore
 
     def forward_(self, x: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         m, _ = x.shape

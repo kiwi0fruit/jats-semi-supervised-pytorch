@@ -1,19 +1,17 @@
 from matplotlib.colors import to_rgb
 
 _types_colors = (
-    'bright red', 'tangerine', 'bright yellow', 'apple green',
+    'bright red', 'tangerine', 'dandelion', 'apple green',  # 'bright yellow'
     'magenta', 'purple', 'blue', 'teal blue',
     'grass green', 'gold', 'dark orange', 'blood red',
-    'aqua blue', 'azure', 'bright purple', 'bright pink',
+    'aqua blue', 'azure', 'bright violet', 'bright pink',  # 'bright purple'
 )
 types_color_names = (
-    'bright red', 'bright orange', 'bright yellow', 'bright green',
-    'dark magenta', 'dark purple', 'dark blue', 'dark aqua',
-    'dark green', 'dark yellow', 'dark orange', 'dark red',
-    'bright aqua', 'bright blue', 'bright purple', 'bright magenta',
+    'red', 'orange', 'yellow', 'lime',
+    'magenta', 'purple', 'blue', 'teal',
+    'green', 'mustard', 'brown', 'crimson',
+    'cyan', 'azure', 'violet', 'pink',
 )
-# ярко-/темно- красный, оранжевый, жёлтый, зелёный, бирюзовый,
-# синий, фиолетовый, пурпурный
 if len(_types_colors) != len(types_color_names):
     raise RuntimeError()
 types_colors = tuple(to_rgb(f'xkcd:{s}') for s in _types_colors)
@@ -28,31 +26,45 @@ def plot():
     import matplotlib.patches as mpatch
 
     jats_names = {
-        1: 'NeT-ENTP', 2: 'TiN-INTJ', 3: 'SiF-ISFP', 4: 'FeS-ESFJ',
-        5: 'SeT-ESTP', 6: 'TiS-ISTJ', 7: 'NiF-INFP', 8: 'FeN-ENFJ',
-        9: 'SeF-ESFP', 10: 'FiS-ISFJ', 11: 'NiT-INTP', 12: 'TeN-ENTJ',
-        13: 'NeF-ENFP', 14: 'FiN-INFJ', 15: 'SiT-ISTP', 16: 'TeS-ESTJ'}
+        1: 'ENT/-ir, ILE, ENTP, NeT', 2: 'INT/ir, LII, INTx, TiN',
+        3: 'ISF/-er, SEI, ISFx, SiF', 4: 'ESF/er, ESE, ESFJ, FeS',
 
-    fig = plt.figure(figsize=[4.3, 6])
+        5: 'EST/-ir, SLE, ESTP, SeT', 6: 'IST/ir, LSI, ISTx, TiS',
+        7: 'INF/-er, IEI, INFx, NiF', 8: 'ENF/er, EIE, ENFJ, FeN',
+
+        9: 'ESF/-ir, SEE, ESFP, SeF', 10: 'ISF/ir, ESI, ISFx, FiS',
+        11: 'INT/-er, ILI, INTx, NiT', 12: 'ENT/er, LIE, ENTJ, TeN',
+
+        13: 'ENF/-ir, IEE, ENFP, NeF', 14: 'INF/ir, EII, INFx, FiN',
+        15: 'IST/-er, SLI, ISTx, SiT', 16: 'EST/er, LSE, ESTJ, TeS'}
+
+    fig = plt.figure(figsize=[4.3 + 0.5, 6])
     ax = fig.add_axes([0, 0, 1, 1])
 
-    for j, (name, color) in enumerate(zip(reversed(types_color_names), reversed(types_colors))):
-        r1 = mpatch.Rectangle((0, j), 1, 1, color=color)
-        ax.text(1, j+.5, f'  type {16 - j}: {name} ({jats_names[16 - j]})', va='center')
+    for j, (color_name, color) in enumerate(zip(reversed(types_color_names), reversed(types_colors))):
+        x0 = 0.65
+        r1 = mpatch.Rectangle((0, j), x0, 1, color=color)
+        ax.text(x0, j + .5, f'  {color_name}', va='center')
+        ax.text(x0 + 0.6, j + .5, f'  {16 - j}', va='center')
+        ax.text(x0 + 0.6 + 0.15, j + .5, f'  {jats_names[16 - j]}', va='center')
         ax.add_patch(r1)
         ax.axhline(j, color='k')
 
     j = len(types_colors)
     ax.text(
-        0., j + 1, '''Bright colors - pacific types,
-        Dark colors - resolute types,
-        Dark/Light switch - J/P switch.'''.replace(8 * ' ', ''),
+        0.05, j + 1 + 2, '''Bright colors - Lateral types (Alpha-Delta).
+        Deep colors - Central types (Beta-Gamma).
+
+        Types are in standard Talanov's order. 8 bright rainbow colors
+        from red to pink are mapped to Alpha and Delta quadras.
+        Deep/Bright switch would be Rational/Irrational switch to
+        quasi-identity type.'''.replace(8 * ' ', ''),
         va='center')
     ax.set_xlim(0, 2.5)
-    ax.set_ylim(0, j + 2)
+    ax.set_ylim(0, j + 2 + 4)
     ax.axis('off')
 
-    display(HTML(f'''<img src="{mh.img(plt, name='types_colors')}" width="300">'''))
+    display(HTML(f'''<img src="{mh.img(name='types_colors')}" width="300">'''))
 
 
 # plot()

@@ -28,8 +28,10 @@ import math
 import numpy as np
 import torch as tr
 from torch import Tensor
+from torch import nn
 from torch.nn import init  # type: ignore
-from kiwi_bugfix_typechecker import func, nn
+from kiwi_bugfix_typechecker import nn as nn_
+from kiwi_bugfix_typechecker import func
 from .flow import SequentialFlow
 from .types import ModuleZToXY, SequentialZToXY, ModuleZOptJToXY
 
@@ -96,22 +98,25 @@ class BNAF(SequentialZToXY):
         self.res = res
 
         if res == 'gated':
-            self.gate = nn.Parameter(init.normal_(tr.empty(1)))
+            self.gate = nn_.Parameter(init.normal_(tr.empty(1)))
         else:
             self.gate = None
 
     def forward_(self, z: Tensor) -> Tuple[Tensor, Tensor]:
         """
         :return: The output tensor and the log-det-Jacobian of this transformation.
+        Of shape (batch_size, z_dim)
         """
         z_out = z
+        # log abs det jacobian:
+        ladetj: Tensor
         j: Opt[Tensor] = None
 
         for module in self._modules.values():
             z_out, j = module.__call__(z_out, j)
             j = j if len(j.shape) == 4 else j.view(j.shape + (1, 1))
         if j is not None:
-            grad = j
+            ladetj = j
         else:
             raise ValueError('Presumably empty Sequential')
 
@@ -119,13 +124,14 @@ class BNAF(SequentialZToXY):
             raise AssertionError
 
         if self.res == 'normal':
-            return z + z_out, func.softplus(grad.squeeze()).sum(-1)
-        if (self.res == 'gated') and (self.gate is not None):
-            return (
-                self.gate.sigmoid() * z_out + (-self.gate.sigmoid() + 1) * z,
-                (func.softplus(grad.squeeze() + self.gate) - func.softplus(self.gate)).sum(-1)
-            )
-        return z_out, grad.squeeze().sum(-1)
+            ret, ladetj = z + z_out, func.softplus(ladetj.squeeze())
+        elif (self.res == 'gated') and (self.gate is not None):
+            ret = self.gate.sigmoid() * z_out + (-self.gate.sigmoid() + 1) * z
+            ladetj = func.softplus(ladetj.squeeze() + self.gate) - func.softplus(self.gate)
+        else:
+            ret, ladetj = z_out, ladetj.squeeze()
+
+        return ret, ladetj.sum(dim=-1)
 
     def _get_name(self):
         return 'BNAF(res={})'.format(self.res)
@@ -161,10 +167,10 @@ class MaskedWeight(ModuleZOptJToXY):
                 0:(i + 1) * in_features // dim
             ] = init.xavier_uniform_(tr.empty(out_features // dim, (i + 1) * in_features // dim))
 
-        self._weight = nn.Parameter(weight)
-        self._diag_weight = nn.Parameter(init.uniform_(tr.empty(out_features, 1)).log())
+        self._weight = nn_.Parameter(weight)
+        self._diag_weight = nn_.Parameter(init.uniform_(tr.empty(out_features, 1)).log())
 
-        self.bias = nn.Parameter(init.uniform_(
+        self.bias = nn_.Parameter(init.uniform_(
             tr.empty(out_features), -1 / math.sqrt(out_features), 1 / math.sqrt(out_features)
         )) if bias else 0
 
@@ -215,12 +221,12 @@ class MaskedWeight(ModuleZOptJToXY):
             transformations combined with this transformation.
         """
         w, wpl = self.get_weights()
-        grad = wpl.transpose(-2, -1).unsqueeze(0).repeat(z.shape[0], 1, 1, 1)
 
-        return (
-            z.matmul(w) + self.bias,
-            tr.logsumexp(grad.unsqueeze(-2) + j.transpose(-2, -1).unsqueeze(-3), -1) if (j is not None) else grad
-        )
+        # log abs det jacobian:
+        grad = wpl.transpose(-2, -1).unsqueeze(0).repeat(z.shape[0], 1, 1, 1)
+        if j is not None:
+            grad = tr.logsumexp(grad.unsqueeze(-2) + j.transpose(-2, -1).unsqueeze(-3), -1)
+        return z.matmul(w) + self.bias, grad
 
     def __repr__(self):
         return 'MaskedWeight(in_features={}, out_features={}, dim={}, bias={})'.format(
@@ -247,20 +253,22 @@ class Tanh(ModuleZOptJToXY, nn.Tanh):  # type: ignore
             The output tensor and the log diagonal blocks of the partial log-Jacobian of previous
             transformations combined with this transformation.
         """
-
+        # log abs det jacobian:
         grad = -2 * (z - math.log(2) + func.softplus(-2 * z))
-        return tr.tanh(z), (grad.view(j.shape) + j) if (j is not None) else grad
+        if j is not None:
+            grad = grad.view(j.shape) + j
+        return tr.tanh(z), grad
 
 
 class BNAFs(SequentialFlow):
-    def __init__(self, dim: int, hidden_dim: int=10, flows_n: int=16, layers_n: int=1, res: str= 'gated'):
+    def __init__(self, dim: int, hidden_dim: int=10, flows_n: int=5, layers_n: int=1, res: str= 'gated'):
         """
         ``res=None`` is no residual connection, ``res='normal'`` is ``x + f(x)``
         and ``res='gated'`` is ``a * x + (1 - a) * f(x)`` where ``a`` is a learnable parameter.
 
         :param res: Which kind of residual connection to use.
         """
-        flows = []
+        flows: List[Union[SequentialZToXY, ModuleZToXY]] = []
         for f in range(flows_n):
             layers: List[ModuleZOptJToXY] = []
             for _ in range(layers_n - 1):
@@ -268,10 +276,13 @@ class BNAFs(SequentialFlow):
                 layers.append(Tanh())
 
             layers.append(MaskedWeight(dim * hidden_dim, dim, dim=dim))
-            flows.append(BNAF(*(
-                    [MaskedWeight(dim, dim * hidden_dim, dim=dim)] + [Tanh()] + layers
-                ), res=res if f < (flows_n - 1) else None
-            ))
+
+            # noinspection PyListCreation
+            args: List[ModuleZOptJToXY] = []
+            args.append(MaskedWeight(dim, dim * hidden_dim, dim=dim))
+            args.append(Tanh())
+            args += layers
+            flows.append(BNAF(*args, res=res if f < (flows_n - 1) else None))
 
             if f < (flows_n - 1):
                 flows.append(Permutation(dim, 'flip'))

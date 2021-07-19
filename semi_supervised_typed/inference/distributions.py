@@ -3,6 +3,7 @@ import torch as tr
 from torch import Tensor
 
 δ = 1e-8
+NEG_LOG_DOT_5 = -math.log(0.5)
 
 
 def log_standard_gaussian(x: Tensor) -> Tensor:
@@ -29,7 +30,7 @@ def log_gaussian(x: Tensor, μ: Tensor, log_σ: Tensor) -> Tensor:
     return log_pdf.view(log_pdf.size(0), -1).sum(dim=1)  # was .sum(dim=-1)
 
 
-def log_standard_categorical(p: Tensor) -> Tensor:
+def neg_log_standard_categorical(p: Tensor) -> Tensor:
     """
     Calculates the cross entropy between a (one-hot) categorical vector
     and a standard (uniform) categorical distribution.
@@ -41,3 +42,14 @@ def log_standard_categorical(p: Tensor) -> Tensor:
     prior = tr.softmax(tr.ones_like(p), dim=1).to(dtype=p.dtype, device=p.device)
     cross_entropy = -tr.sum(p * tr.log(prior + δ), dim=1)
     return cross_entropy
+
+
+def neg_log_standard_bernoulli(p: Tensor) -> Tensor:
+    """
+    Calculates the cross entropy between a bernoulli sample
+    p and a standard (0.5) bernoulli distribution.
+
+    :param p: bernoulli distribution sample of shape (batch_size,)
+    :return: H(p, standard_bernoulli) of shape (batch_size,)
+    """
+    return tr.zeros_like(p).to(dtype=p.dtype, device=p.device) + NEG_LOG_DOT_5

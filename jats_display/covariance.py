@@ -13,8 +13,8 @@ def compare_cov(run_id1: str, run_id2: str, models: Dict[str, JATSModelOutput], 
     profs1 = models[run_id1]
     profs2 = models[run_id2]
 
-    len1 = profs1.z_normalized.shape[1]
-    z_cat = np.concatenate((profs1.z_normalized, profs2.z_normalized), axis=1)
+    len1 = profs1.z.shape[1]
+    z_cat = np.concatenate((profs1.z, profs2.z), axis=1)
     z_cat_normalized, _, _ = get_x_normalized_μ_σ(z_cat, weights)
     sub_abs_Σ = np.abs(np.cov(z_cat_normalized.T, aweights=weights))[:len1, len1:]
     sub_abs_Σ[sub_abs_Σ < corr_threshold] = 0.
@@ -26,19 +26,10 @@ def compare_cov(run_id1: str, run_id2: str, models: Dict[str, JATSModelOutput], 
 
 
 def check_cov(models: Dict[str, JATSModelOutput], weight_vec: Opt[Array], path_prefix: str,
-              allowed_basis_dims: Tuple[int, ...]):
-    for mod_id, mod_out in models.items():
-        if len(mod_out.basis) not in allowed_basis_dims:
-            print(f'WARNING: {mod_id} model has basis of length not from {allowed_basis_dims}: {mod_out.basis}')
-
+              n_models_to_find: int=3, corr_threshold: float=0.85, score_to_reach: float=8, plot_cov: bool=False):
     if len(models.keys()) == 1:
         print('Nothing to compare.')
         return
-
-    corr_threshold = 0.85
-    n_models_to_find = 4
-    score_to_reach = 8
-    plot_cov = False
 
     selections = []
     plotted: List[Tuple[str, str]] = []

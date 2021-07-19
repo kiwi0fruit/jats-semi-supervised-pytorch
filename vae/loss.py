@@ -1,8 +1,13 @@
-from typing import Tuple, Union, Sequence, Optional as Opt, List
+from typing import Tuple, Union, Sequence, Optional as Opt
 from abc import abstractmethod
+import math
+import torch as tr
 from torch import Tensor
+from kiwi_bugfix_typechecker import test_assert
 from beta_tcvae_typed import Normal
 from .loss_types import BaseBaseWeightedLoss, BaseTrimLoss
+
+test_assert()
 
 
 class BaseWeightedLoss(BaseBaseWeightedLoss):
@@ -88,53 +93,73 @@ class BaseWeightedLoss(BaseBaseWeightedLoss):
         raise NotImplementedError
 
 
-def kld_basis_strip(μ: Tensor, log_σ: Tensor, strip_scl: float=0,
-                    basis: List[int]=None, kld: Tensor=None) -> Union[int, Tensor]:
-    """
-    kld_strip = 0 if strip_scl == 0 or not basis
-
-    if μ size is (batch_size, feature_size_0, ...) then returns Tensor of the size (batch_size, ...).
-    "..." in common case would be nothing.
-    """
-    if (strip_scl == 0) or not basis:
-        return 0
-
-    kld_mat = Normal.kl((μ, log_σ)) if (kld is None) else kld
-    drop = [i for i in range(μ.size(1)) if i not in basis]
-    return kld_mat[:, drop].view(μ.size(0), -1).sum(dim=1) * strip_scl
-
-
 class TrimLoss(BaseTrimLoss):
-    def __init__(self, strip_scl: float=0, basis: List[int]=None):
+    def __init__(self, μ_scl: float=0, σ_scl: float=0, max_abs_μ: float=3, inv_min_σ: float=5 * 6,
+                 basis_scl: float=0, anti_basis: Tuple[int, ...]=(), inv_max_σ: float=1,
+                 μ_norm_scl: float=0, μ_norm_std: float=1):
         """
         Presumably works really badly with normalizing flows for q(z|x).
         Should work OK with normalizing flows for p(z).
 
-        ``KLD_strip.sum(1).mean()``
+        ``ReLU_trim.sum(1).mean()``
 
-        KLD_strip is a basis strip via chery-picking particular latent dims and
-        setting high enough KLD term for them (that is calculated via closed
-        form assuming standard normal priors for the dimensions):
+        μ and σ trim of the q_dist via special ReLU Trim Penalty (ReLU_trim).
 
-        ``KLD_strip(μ,log_σ; strip_scl,basis) = strip_scl * KLD(μ,log_σ)[:, not_basis]``
+        ``ReLU_trim(μ,log_σ; μ_scl,σ_scl,μ_thr,σ_thr) =``
 
-        ``KLD(μ,log_σ) = (log_σ * 2 + 1 - μ**2 - exp(log_σ * 2)) * (-0.5)``
+        ``μ_scl * (ReLU(μ - max_abs_μ) + ReLU(-μ - max_abs_μ))``
 
-        KLD_strip loss affects only deterministic encoder behaviour (q_dist)
-        hence presumably ELBO would stay ELBO.
+        ``+ σ_scl * ReLU(-log_σ + log(1/inv_min_σ))``
+
+        ReLU_trim loss affects only deterministic encoder behaviour (q_dist)
+        hence ELBO would stay ELBO.
         """
         super(TrimLoss, self).__init__()
-        self.strip_scl = strip_scl
-        self.basis = basis
 
-    def set_strip_scl(self, strip_scl: float) -> None:
-        self.strip_scl = strip_scl
+        self.μ_scl = μ_scl
+        self.use_μ = self.μ_scl > 0
+        assert max_abs_μ > 0
+        self.max_abs_μ = max_abs_μ
 
-    def set_basis(self, basis: List[int]=None):
-        self.basis = basis
+        self.σ_scl = σ_scl
+        self.use_σ = self.σ_scl > 0
+        self.min_log_σ = math.log(inv_min_σ**-1)
+        self.max_log_σ = math.log(inv_max_σ**-1)
 
-    def forward_(self, μ: Tensor, log_σ: Tensor, kld: Tensor=None) -> Union[Tensor, int]:
-        basis_strip = kld_basis_strip(μ=μ, log_σ=log_σ, strip_scl=self.strip_scl, basis=self.basis, kld=kld)
-        if isinstance(basis_strip, int):
-            return basis_strip
-        return basis_strip.mean()
+        self.basis_scl = basis_scl
+        self.anti_basis = anti_basis
+
+        self.μ_norm_scl = μ_norm_scl
+        self.μ_norm_std = μ_norm_std
+        self.use_μ_norm = self.μ_norm_scl > 0
+
+    def set_anti_basis(self, anti_basis: Tuple[int, ...]):
+        self.anti_basis = anti_basis
+
+    def set_μ_scl(self, μ_scl: float) -> None:
+        self.μ_scl = μ_scl
+        self.use_μ = self.μ_scl > 0
+
+    def forward_(self, μ: Tensor, log_σ: Tensor) -> Union[Tensor, int]:
+        max_μ = self.max_abs_μ
+        ret: Union[Tensor, int]
+        if self.use_μ and self.use_σ:
+            ret = (
+                    (tr.relu(μ - max_μ) + tr.relu(-μ - max_μ)) * self.μ_scl
+                    + (tr.relu(-log_σ + self.min_log_σ) + tr.relu(log_σ - self.max_log_σ)) * self.σ_scl
+            ).view(μ.size(0), -1).sum(dim=1).mean()
+        elif self.use_σ:
+            ret = (tr.relu(-log_σ + self.min_log_σ) + tr.relu(log_σ - self.max_log_σ)
+                   ).view(μ.size(0), -1).sum(dim=1).mean() * self.σ_scl
+        elif self.use_μ:
+            ret = (tr.relu(μ - max_μ) + tr.relu(-μ - max_μ)).view(μ.size(0), -1).sum(dim=1).mean() * self.μ_scl
+        else:
+            ret = 0
+
+        if self.anti_basis:
+            kld_mat = Normal.kl((μ, log_σ))
+            ret = kld_mat[:, self.anti_basis].view(μ.size(0), -1).sum(dim=1).mean() * self.basis_scl + ret
+
+        if self.use_μ_norm:
+            ret = (μ.std() - self.μ_norm_std)**2 * self.μ_norm_scl + ret
+        return ret

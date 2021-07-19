@@ -3,7 +3,7 @@ from torch import Tensor
 import torch as tr
 from torch.distributions.bernoulli import Bernoulli  # type: ignore
 from torch.distributions.categorical import Categorical  # type: ignore
-from kiwi_bugfix_typechecker.nn import BCEWithLogitsLoss, CrossEntropyLoss
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from kiwi_bugfix_typechecker import torch as tr_
 
 from .loss import BaseWeightedLoss

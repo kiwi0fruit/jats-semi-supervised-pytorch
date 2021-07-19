@@ -1,17 +1,20 @@
-from typing import Tuple
+from typing import Tuple, Dict
 from abc import abstractmethod
 from torch import Tensor
-from kiwi_bugfix_typechecker.nn import Module
+from torch.nn import Module
 
 
-RetSVI = Tuple[Tensor, Tensor, Tensor]
+RetSVI = Tuple[Tensor, Tensor, Tensor, Dict[str, Tensor]]
 class BaseSVI(Module):
     @abstractmethod
-    def forward_(self, x: Tensor, y: Tensor=None, weight: Tensor=None, x_nll: Tensor=None) -> RetSVI: ...
-    def forward(self, x: Tensor, y: Tensor=None, weight: Tensor=None, x_nll: Tensor=None) -> RetSVI: ...  # type: ignore
-    def __call__(self, x: Tensor, y: Tensor=None, weight: Tensor=None, x_nll: Tensor=None) -> RetSVI:  # type: ignore
+    def forward_(self, x: Tensor, y: Tensor=None, weight: Tensor=None, x_nll: Tensor=None
+                 , x_cls: Tensor=None) -> RetSVI: ...
+    def forward(self, x: Tensor, y: Tensor=None, weight: Tensor=None, x_nll: Tensor=None,  # type: ignore
+                x_cls: Tensor=None) -> RetSVI: ...
+    def __call__(self, x: Tensor, y: Tensor=None, weight: Tensor=None, x_nll: Tensor=None,  # type: ignore
+                 x_cls: Tensor=None) -> RetSVI:
         """
-        returns ``(nelbo, cross_entropy, probs)``.
+        returns ``(nelbo, cross_entropy, probs, verbose)``.
         When ``y is None`` ``cross_entropy`` is a dummy zero tensor.
         ``nelbo`` > 0 is of size (batch_size,). ``cross_entropy`` is classification loss.
         """

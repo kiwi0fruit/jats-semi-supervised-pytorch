@@ -28,7 +28,8 @@ from typing import Tuple
 import numpy as np
 import torch as tr
 from torch import Tensor
-from kiwi_bugfix_typechecker import func
+from torch.nn import functional as func
+from kiwi_bugfix_typechecker import func as func_
 
 DEFAULT_MIN_BIN_WIDTH = 1e-3
 DEFAULT_MIN_BIN_HEIGHT = 1e-3
@@ -55,7 +56,7 @@ def unconstrained_rqs(inputs: Tensor, unnormalized_widths: Tensor, unnormalized_
     outputs = tr.zeros_like(inputs)
     logabsdet = tr.zeros_like(inputs)
 
-    unnormalized_derivatives = func.pad(unnormalized_derivatives, pad=(1, 1))
+    unnormalized_derivatives = func.pad(unnormalized_derivatives, pad=[1, 1])
     constant = np.log(np.exp(1 - min_derivative) - 1)
     unnormalized_derivatives[..., 0] = constant
     unnormalized_derivatives[..., -1] = constant
@@ -96,18 +97,18 @@ def rqs(inputs: Tensor, unnormalized_widths: Tensor, unnormalized_heights: Tenso
     widths = func.softmax(unnormalized_widths, dim=-1)
     widths = min_bin_width + (1 - min_bin_width * num_bins) * widths
     cumwidths = tr.cumsum(widths, dim=-1)
-    cumwidths = func.pad(cumwidths, pad=(1, 0), mode='constant', value=0.0)
+    cumwidths = func.pad(cumwidths, pad=[1, 0], mode='constant', value=0.0)
     cumwidths = (right - left) * cumwidths + left
     cumwidths[..., 0] = left
     cumwidths[..., -1] = right
     widths = cumwidths[..., 1:] - cumwidths[..., :-1]
 
-    derivatives = min_derivative + func.softplus(unnormalized_derivatives)
+    derivatives = min_derivative + func_.softplus(unnormalized_derivatives)
 
     heights = func.softmax(unnormalized_heights, dim=-1)
     heights = min_bin_height + (1 - min_bin_height * num_bins) * heights
     cumheights = tr.cumsum(heights, dim=-1)
-    cumheights = func.pad(cumheights, pad=(1, 0), mode='constant', value=0.0)
+    cumheights = func.pad(cumheights, pad=[1, 0], mode='constant', value=0.0)
     cumheights = (top - bottom) * cumheights + bottom
     cumheights[..., 0] = bottom
     cumheights[..., -1] = top

@@ -2,7 +2,8 @@ from abc import abstractmethod
 from typing import Tuple
 import torch as tr
 from torch import Tensor
-from kiwi_bugfix_typechecker.nn import Module
+from torch.nn import Module
+from beta_tcvae_typed import XYDictStrZ
 
 
 RetLadderEncoder = Tuple[Tensor, Tuple[Tensor, Tuple[Tensor, ...]]]
@@ -34,10 +35,10 @@ class ModuleXToX(Module):
     def __call__(self, x: Tensor) -> Tensor: ...  # type: ignore
 
 
-class ModuleXYToXY(Module):
+class ModuleXYToXYDictStrOptZ(Module):
     # noinspection PyMissingConstructor
     def __init__(self): ...
     @abstractmethod
-    def forward_(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor]: ...
-    def forward(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor]: ...  # type: ignore
-    def __call__(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor]: ...  # type: ignore
+    def forward_(self, x: Tensor, y: Tensor) -> XYDictStrZ: ...
+    def forward(self, x: Tensor, y: Tensor) -> XYDictStrZ: ...  # type: ignore
+    def __call__(self, x: Tensor, y: Tensor) -> XYDictStrZ: ...  # type: ignore

@@ -9,14 +9,15 @@ cross_esc_path () {
 }
 
 printf "[MESSAGES CONTROL]
-disable=attribute-defined-outside-init,duplicate-code,\
-too-many-instance-attributes,too-many-branches,\
+disable=abstract-method,attribute-defined-outside-init,duplicate-code,\
+too-many-instance-attributes,too-many-branches,too-many-return-statements,\
 too-many-nested-blocks,no-member,not-callable,no-name-in-module,\
 import-error,missing-docstring,invalid-name,too-many-locals,\
 too-many-arguments,too-few-public-methods,too-many-statements,\
 superfluous-parens,bad-whitespace,bad-continuation,\
 multiple-statements,pointless-string-statement,unsubscriptable-object,\
-too-many-boolean-expressions,relative-beyond-top-level,too-many-ancestors
+too-many-boolean-expressions,relative-beyond-top-level,too-many-ancestors,\
+len-as-condition,unneeded-not,self-assigning-variable,import-outside-toplevel
 
 [FORMAT]
 max-line-length=120

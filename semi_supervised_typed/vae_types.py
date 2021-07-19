@@ -1,7 +1,8 @@
 from abc import abstractmethod
 from typing import Tuple
 from torch import Tensor
-from kiwi_bugfix_typechecker.nn import Module
+from torch.nn import Module
+from beta_tcvae_typed import XYDictStrZ
 
 
 RetLadderEncoder = Tuple[Tensor, Tuple[Tensor, Tuple[Tensor, ...]]]
@@ -33,10 +34,10 @@ class ModuleXToX(Module):
         return self.forward_(x=x)
 
 
-class ModuleXYToXY(Module):
+class ModuleXYToXYDictStrOptZ(Module):
     @abstractmethod
-    def forward_(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward_(self, x: Tensor, y: Tensor) -> XYDictStrZ:
         raise NotImplementedError
 
-    def forward(self, x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor]:  # pylint: disable=arguments-differ
+    def forward(self, x: Tensor, y: Tensor) -> XYDictStrZ:  # pylint: disable=arguments-differ
         return self.forward_(x=x, y=y)

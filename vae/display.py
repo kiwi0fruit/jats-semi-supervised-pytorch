@@ -4,12 +4,13 @@ from kiwi_bugfix_typechecker import ipython
 
 
 class Log:
-    def __init__(self, temp_dir: str, run_id: str, db_name: str):
+    def __init__(self, temp_dir: str, run_id: str, db_name: str, print_to_ipython: bool=False):
         self.db_name = db_name
         self.temp_dir = temp_dir
         self.run_id = run_id
         os.makedirs(p.dirname(self.checkpoint()), exist_ok=True)
         self.set_run_id(run_id)
+        self.print_to_ipython = print_to_ipython
 
     def set_run_id(self, run_id: str):
         self.run_id = run_id
@@ -31,12 +32,14 @@ class Log:
         return self.prefix_nn() + (f'__ep{epoch}' if epoch else '') + '.pt'
 
     def print(self, *objs):
-        print(*objs)
+        if self.print_to_ipython:
+            print(*objs)
         print(*objs, file=open(self.prefix_nn() + '.txt', 'a', encoding='utf-8'))
 
     def print_i(self, *objs):
         print(*objs, file=open(self.prefix_nn() + '_i.txt', 'a', encoding='utf-8'))
 
     def display(self, *objs):
-        ipython.display(*objs)
+        if self.print_to_ipython:
+            ipython.display(*objs)
         print(*objs, file=open(self.prefix_nn() + '.txt', 'a', encoding='utf-8'))

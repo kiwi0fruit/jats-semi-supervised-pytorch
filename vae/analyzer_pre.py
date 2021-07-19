@@ -1,4 +1,4 @@
-from typing import Union, Callable, Optional as Opt
+from typing import Union
 from dataclasses import dataclass
 # noinspection PyPep8Naming
 from numpy import ndarray as Array
@@ -11,7 +11,6 @@ class BaseAnalyzer:
     x_rec: Array
     z_normalized: Array
     z: Array
-    _z_norm_refs: Opt[Array]
 
 
 @dataclass
@@ -38,17 +37,7 @@ class LinearAnalyzer(BaseAnalyzer):
         x_rec = (z_normalized @ self.inverse_transform_matrix) * self.σ_x + self.μ_x
         return x_rec
 
-    def set_z_norm_refs(self, get_refs: Callable[[Array], Array]):
-        self._z_norm_refs = get_refs(self.z_normalized)
-
-    @property
-    def z_norm_refs(self) -> Array:
-        if self._z_norm_refs is not None:
-            return self._z_norm_refs
-        raise ValueError('set_z_norm_refs first')
-
     def __post_init__(self):
         self.x_rec = self.inverse_transform(self.transform(self.x))
         self.z_normalized = self.transform(self.x)
         self.z = self.z_normalized * self.σ_z + self.μ_z
-        self._z_norm_refs = None

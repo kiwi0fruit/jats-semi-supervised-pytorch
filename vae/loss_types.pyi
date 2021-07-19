@@ -3,7 +3,7 @@ from abc import abstractmethod, ABCMeta
 import torch as tr
 from torch import Tensor
 from semi_supervised_typed import Loss
-from kiwi_bugfix_typechecker.nn import Module
+from torch.nn import Module
 
 
 # noinspection PyAbstractClass
@@ -29,8 +29,16 @@ class BaseBaseWeightedLoss(Loss, metaclass=ABCMeta):
 
 
 # noinspection PyAbstractClass
-class BaseTrimLoss(Module):
+class BaseBasisStripLoss(Module):
     @abstractmethod
     def forward_(self, μ: Tensor, log_σ: Tensor, kld: Tensor=None) -> Union[Tensor, int]: ...
     def forward(self, μ: Tensor, log_σ: Tensor, kld: Tensor=None) -> Union[Tensor, int]: ...  # type: ignore
     def __call__(self, μ: Tensor, log_σ: Tensor, kld: Tensor=None) -> Union[Tensor, int]: ...  # type: ignore
+
+
+# noinspection PyAbstractClass
+class BaseTrimLoss(Module):
+    @abstractmethod
+    def forward_(self, μ: Tensor, log_σ: Tensor) -> Union[Tensor, int]: ...
+    def forward(self, μ: Tensor, log_σ: Tensor) -> Union[Tensor, int]: ...  # type: ignore
+    def __call__(self, μ: Tensor, log_σ: Tensor) -> Union[Tensor, int]: ...  # type: ignore

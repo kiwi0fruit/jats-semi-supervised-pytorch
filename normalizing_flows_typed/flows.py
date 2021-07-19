@@ -29,8 +29,10 @@ import numpy as np
 import scipy as sp
 import torch as tr
 from torch import Tensor
+from torch import nn
 from torch.nn import init  # type: ignore
-from kiwi_bugfix_typechecker import nn, func
+from torch.nn import functional as func
+from kiwi_bugfix_typechecker import nn as nn_, func as func_
 from .utils import unconstrained_rqs
 from .flow import Flow
 from .types import ModuleXToX
@@ -67,9 +69,9 @@ class Planar(Flow):
         super().__init__()
         self.dim = dim
         self.h = nonlinearity
-        self.w = nn.Parameter(tr.zeros(dim))
-        self.u = nn.Parameter(tr.zeros(dim))
-        self.b = nn.Parameter(tr.zeros(1))
+        self.w = nn_.Parameter(tr.zeros(dim))
+        self.u = nn_.Parameter(tr.zeros(dim))
+        self.b = nn_.Parameter(tr.zeros(1))
         self.reset_parameters(dim)
 
     def reset_parameters(self, dim: int):
@@ -90,7 +92,7 @@ class Planar(Flow):
             pass
         elif self.h == tr.tanh:
             scal = tr.log(1 + tr.exp(w @ u)) - w @ u - 1
-            u = u + scal * w / func.norm(w)
+            u = u + scal * w / func_.norm(w)
         else:
             raise NotImplementedError("This non-linearity is not supported.")
         lin = tr.unsqueeze(z @ w, 1) + self.b
@@ -114,9 +116,9 @@ class Radial(Flow):
     def __init__(self, dim: int):
         super().__init__()
         self.dim = dim
-        self.x0 = nn.Parameter(tr.zeros(dim))
-        self.log_α = nn.Parameter(tr.zeros(1))
-        self.β = nn.Parameter(tr.zeros(1))
+        self.x0 = nn_.Parameter(tr.zeros(dim))
+        self.log_α = nn_.Parameter(tr.zeros(1))
+        self.β = nn_.Parameter(tr.zeros(1))
 
     def reset_parameters(self, dim: int):
         init.uniform_(self.x0, -math.sqrt(1/dim), math.sqrt(1/dim))
@@ -130,7 +132,7 @@ class Radial(Flow):
         log_α, x0 = self.log_α, self.x0
 
         _, n = z.shape
-        r = func.norm(z - x0)
+        r = func_.norm(z - x0)
         h = (tr.exp(log_α) + r)**-1
         β = -tr.exp(log_α) + tr.log(1 + tr.exp(self.β))
         z_out = z + β * h * (z - x0)
@@ -210,8 +212,8 @@ class MAF(Flow):
         super().__init__()
         self.dim = dim
         # noinspection PyTypeChecker
-        self.layers = nn.ModuleList()
-        self.initial_param = nn.Parameter(tr.zeros(2))
+        self.layers = nn.ModuleList()  # type: ignore
+        self.initial_param = nn_.Parameter(tr.zeros(2))
         for i in range(1, dim):
             self.layers += [base_network(i, 2, hidden_dim)]
         self.reset_parameters()
@@ -256,8 +258,8 @@ class ActNorm(Flow):
     def __init__(self, dim: int):
         super().__init__()
         self.dim = dim
-        self.μ = nn.Parameter(tr.zeros(dim, dtype=tr.float))
-        self.log_σ = nn.Parameter(tr.zeros(dim, dtype=tr.float))
+        self.μ = nn_.Parameter(tr.zeros(dim, dtype=tr.float))
+        self.log_σ = nn_.Parameter(tr.zeros(dim, dtype=tr.float))
 
     def forward_(self, z: Tensor) -> Tuple[Tensor, Tensor]:
         z_out = z * tr.exp(self.log_σ) + self.μ
@@ -285,9 +287,9 @@ class OneByOneConv(Flow):
         W, _ = sp.linalg.qr(np.random.randn(dim, dim))
         P, L, U = sp.linalg.lu(W)
         self.register_buffer('P', tr.tensor(P, dtype=tr.float))
-        self.L = nn.Parameter(tr.tensor(L, dtype=tr.float))
-        self.S = nn.Parameter(tr.tensor(np.diag(U), dtype=tr.float))
-        self.U = nn.Parameter(tr.triu(tr.tensor(U, dtype=tr.float), diagonal=1))
+        self.L = nn_.Parameter(tr.tensor(L, dtype=tr.float))
+        self.S = nn_.Parameter(tr.tensor(np.diag(U), dtype=tr.float))
+        self.U = nn_.Parameter(tr.triu(tr.tensor(U, dtype=tr.float), diagonal=1))
         self.W_inv = None
 
     def forward_(self, z: Tensor) -> Tuple[Tensor, Tensor]:
@@ -325,8 +327,8 @@ class NSFAR(Flow):
         self.K = K
         self.B = B
         # noinspection PyTypeChecker
-        self.layers = nn.ModuleList()
-        self.init_param = nn.Parameter(tr.zeros(3 * K - 1))
+        self.layers = nn.ModuleList()  # type: ignore
+        self.init_param = nn_.Parameter(tr.zeros(3 * K - 1))
         for i in range(1, dim):
             self.layers += [base_network(i, 3 * K - 1, hidden_dim)]
         self.reset_parameters()
@@ -346,7 +348,7 @@ class NSFAR(Flow):
                 W, H, D = out.split(self.K, dim=1)
             W, H = tr.softmax(W, dim=1), tr.softmax(H, dim=1)
             W, H = 2 * self.B * W, 2 * self.B * H
-            D = func.softplus(D)
+            D = func_.softplus(D)
             z_out[:, i], ld = unconstrained_rqs(
                 z[:, i], W, H, D, inverse=False, tail_bound=self.B)
             log_det += ld
@@ -364,7 +366,7 @@ class NSFAR(Flow):
                 W, H, D = out.split(self.K, dim=1)
             W, H = tr.softmax(W, dim=1), tr.softmax(H, dim=1)
             W, H = 2 * self.B * W, 2 * self.B * H
-            D = func.softplus(D)
+            D = func_.softplus(D)
             z_out[:, i], ld = unconstrained_rqs(
                 z[:, i], W, H, D, inverse=True, tail_bound=self.B)
             log_det += ld
@@ -392,7 +394,7 @@ class NSFCL(Flow):
         W, H, D = out.split(self.K, dim=2)
         W, H = tr.softmax(W, dim=2), tr.softmax(H, dim=2)
         W, H = 2 * self.B * W, 2 * self.B * H
-        D = func.softplus(D)
+        D = func_.softplus(D)
         upper, ld = unconstrained_rqs(
             upper, W, H, D, inverse=False, tail_bound=self.B)
         log_det += tr.sum(ld, dim=1)
@@ -400,7 +402,7 @@ class NSFCL(Flow):
         W, H, D = out.split(self.K, dim=2)
         W, H = tr.softmax(W, dim=2), tr.softmax(H, dim=2)
         W, H = 2 * self.B * W, 2 * self.B * H
-        D = func.softplus(D)
+        D = func_.softplus(D)
         lower, ld = unconstrained_rqs(
             lower, W, H, D, inverse=False, tail_bound=self.B)
         log_det += tr.sum(ld, dim=1)
@@ -413,7 +415,7 @@ class NSFCL(Flow):
         W, H, D = out.split(self.K, dim=2)
         W, H = tr.softmax(W, dim=2), tr.softmax(H, dim=2)
         W, H = 2 * self.B * W, 2 * self.B * H
-        D = func.softplus(D)
+        D = func_.softplus(D)
         lower, ld = unconstrained_rqs(
             lower, W, H, D, inverse=True, tail_bound=self.B)
         log_det += tr.sum(ld, dim=1)
@@ -421,7 +423,7 @@ class NSFCL(Flow):
         W, H, D = out.split(self.K, dim=2)
         W, H = tr.softmax(W, dim=2), tr.softmax(H, dim=2)
         W, H = 2 * self.B * W, 2 * self.B * H
-        D = func.softplus(D)
+        D = func_.softplus(D)
         upper, ld = unconstrained_rqs(
             upper, W, H, D, inverse=True, tail_bound=self.B)
         log_det += tr.sum(ld, dim=1)

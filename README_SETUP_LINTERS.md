@@ -50,8 +50,7 @@ batch or git-bash:
 ```bash
 conda create -n mypyls -c defaults -c conda-forge "python>=3.7" future mypy python-jsonrpc-server typed-ast mypy_extensions exec-wrappers
 activate mypyls
-# pip install "https://github.com/matangover/mypyls/archive/master.zip#egg=mypyls[default-mypy]"
-pip install git+"https://github.com/kiwi0fruit/mypyls#egg=mypyls[default-mypy]" || exi
+pip install "https://github.com/matangover/mypyls/archive/master.zip#egg=mypyls[default-mypy]"
 ```
 
 git-bash only:

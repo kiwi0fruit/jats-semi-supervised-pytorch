@@ -1,4 +1,4 @@
-from typing import Tuple, Optional as Opt, Iterable, Union
+from typing import Tuple, Optional as Opt, Iterable, Union, Iterator
 from dataclasses import dataclass
 from itertools import cycle
 import numpy as np
@@ -8,11 +8,13 @@ import torch as tr
 from torch import Tensor
 from torch.utils.data import DataLoader, TensorDataset
 from kiwi_bugfix_typechecker.data import WeightedRandomSampler
+from kiwi_bugfix_typechecker import test_assert
 
 from .losses import BaseWeightedLoss, BernoulliLoss, CategoricalLoss
 from .utils import reals_to_buckets
 
 cuda = tr.cuda.is_available()
+test_assert()
 
 
 @dataclass
@@ -36,6 +38,8 @@ class Dim:
     z: int
     buckets: int
     y: int = 0
+    a: int = 0
+    hy: Tuple[int, ...] = (0,)
 
     def set_z(self, n: int):
         self.z = n
@@ -43,9 +47,20 @@ class Dim:
     def set_y(self, n: int):
         self.y = n
 
+    def set_a(self, n: int):
+        self.a = n
 
-VAELoaderReturnType = Tuple[Tensor, Tensor, Tensor, Tensor]
-DGMLoaderReturnType = Tuple[Tuple[Tensor, Tensor, Tensor, Tensor, Tensor], Tuple[Tensor, Tensor, Tensor, Tensor]]
+    def set_h(self, *n: int):
+        self.h = n
+
+    def set_hy(self, *n: int):
+        self.hy = n
+
+
+LoaderRetType = Tuple[Tensor, Tensor, Tensor, Tensor]
+LblLoaderRetType = Tuple[Tuple[Tensor, Tensor, Tensor, Tensor, Tensor], Tuple[Tensor, Tensor, Tensor, Tensor]]
+DblLblLoaderRetType = Tuple[Tuple[Tensor, Tensor, Tensor, Tensor, Tensor], Tuple[Tensor, Tensor, Tensor, Tensor],
+                            Tuple[Tensor, Tensor, Tensor, Tensor]]
 
 
 class TrainLoader:
@@ -67,10 +82,13 @@ class TrainLoader:
                  input_lbl: Array=None, input_lbl_bucketed: Union[Array, bool]=None,
                  weight_vec_lbl: Array=None, weight_mat_lbl: Union[Array, bool]=None, target_lbl: Array=None,
                  one_hot_target_lbl: Array=None, dtype: tr.dtype=tr.float, batch_size: int=128) -> None:
-        """ ``idxs_label`` should contain indexes to select from ``input``. """
+        """
+        ``idxs_label`` should contain indexes to select from ``input``.
+        """
         if ((input_bucketed is False) or (weight_mat is False) or (input_lbl_bucketed is False)
                 or (weight_mat_lbl is False)):
-            raise ValueError
+            raise ValueError('False arg is not supported. Use: Array, True or None.')
+
         if (input_lbl is None) and (
             (input_lbl_bucketed is not None)
             or (weight_vec_lbl is not None)
@@ -183,27 +201,47 @@ class TrainLoader:
     def regenerate_loaders(self, batch_size: int=128, force_not_weighted: bool=False):
         unlabelled = self._get_loader(batch_size=batch_size, force_not_weighted=force_not_weighted,
                                       labelled=False)
-        if unlabelled is not None:
-            self.unlabelled = unlabelled
-        else:
-            raise RuntimeError
+        assert unlabelled is not None
+        self.unlabelled = unlabelled
         self.labelled = self._get_loader(batch_size=batch_size, force_not_weighted=force_not_weighted,
                                          labelled=True)
         self.unlabelled_dataset_size = len(self.unlabelled.dataset)
         self.labelled_dataset_size = (len(self.labelled.dataset) if (self.labelled is not None) else
                                       self.unlabelled_dataset_size)
 
-    def get_vae_loader(self) -> Iterable:
+    def get_loader(self) -> Iterable:
         """
         Iterable returns (x, x_for_nll, target, weight_mat).
         """
         return self.unlabelled
 
-    def get_dgm_loader(self) -> Iterable:
+    def get_lbl_loader(self) -> Iterable:
         """
-        Iterable returns ((x, x_for_nll, target, weight_mat, one_hot_target), (x, x_for_nll, target, weight_mat)).
+        Iterable returns ((x, x_for_nll, target, weight_mat, one_hot_target), (u, u_for_nll, target_u, weight_mat_u)).
         where first is labelled and the second one is not labelled.
         """
         if self.labelled is None:
             raise ValueError('self.labelled is None. Presumably one_hot_target_label was not provided to constructor.')
         return zip(cycle(self.labelled), self.unlabelled)
+
+    def get_double_lbl_loader(self) -> Iterable:
+        """
+        Iterable returns (
+            (x, x_for_nll, target, weight_mat, one_hot_target),
+            (u1, u_for_nll1, target_u1, weight_mat_u1),
+            (u2, u_for_nll2, target_u2, weight_mat_u2)
+        ).
+        where first is labelled and two others are not labelled.
+        """
+        if self.labelled is None:
+            raise ValueError('self.labelled is None. Presumably one_hot_target_label was not provided to constructor.')
+        unlbl_iter = iter(self.unlabelled)
+        return zip(cycle(self.labelled), It(unlbl_iter), It(unlbl_iter))
+
+
+class It:
+    def __init__(self, it: Iterator):
+        self.it = it
+
+    def __iter__(self) -> Iterator:
+        return self.it

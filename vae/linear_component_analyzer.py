@@ -82,7 +82,10 @@ def get_fa(input_: Array, learn_input: Array, learn_weight_vec: Opt[Array], n_co
     Σ_x = np.cov(x_normalized.T, aweights=weight_vec)  # (~162, ~162)
 
     for j, i in enumerate(n_comp_list):
-        fa = FactorAnalyzer(n_factors=i, is_corr_matrix=True, rotation=None)
+        fa = FactorAnalyzer(n_factors=i, is_corr_matrix=True, method='ml',
+                            rotation=(None, 'varimax', 'oblimax', 'quartimax', 'equamax')[0]
+                            )
+        # rotation=('equamax', None)[1]
         fa.fit(Σ_x)
         fa.mean_ = np.zeros(x.shape[1])
         fa.std_ = fa.mean_ + 1.

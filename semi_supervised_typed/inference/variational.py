@@ -22,9 +22,8 @@ class ImportanceWeightedSampler:
         return x.repeat(self._mc * self._iw, 1)
 
     def __call__(self, elbo: Tensor) -> Tensor:
-        dim = 1
         elbo = elbo.view(self._mc, self._iw, -1)
-        elbo = tr.mean(tr.logsumexp(elbo, dim=dim) - math.log(elbo.size(dim)), dim=0)
+        elbo = tr.mean(tr.logsumexp(elbo, dim=1) - math.log(elbo.shape[1]), dim=0)
         return elbo.view(-1)
 
 
