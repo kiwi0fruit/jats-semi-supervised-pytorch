@@ -82,8 +82,8 @@ Unfortunately 12 intermediate axes are dependent hence they are unstable to lear
 
 Mappings:
 
-161 dim [questionnaire] (Encoder)=>  
-8 mu, 8 sigma (Sampler)=>  
-8 dim [FZA4] (SubDecoder)=>  
-12 dim [Khizhnyak axes] (Decoder)=>  
+161 dim [questionnaire] *(Encoder)*=>  
+8 mu, 8 sigma *(Sampler)*=>  
+8 dim [FZA4] *(SubDecoder)*=>  
+12 dim [Khizhnyak axes] *(Decoder)*=>  
 160 dim [questionnaire]
