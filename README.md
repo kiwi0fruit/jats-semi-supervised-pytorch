@@ -66,7 +66,7 @@ At some point I also played with normalizing flows added to VAE but abandonded i
 Second unfinished model (current version)
 ----------------------------------------------
 
-*In some places the code is very suboptimal because of my poor early decisions. I'm aware of it but rewriting it does not worth it.*.
+*In some places the code is very suboptimal because of my poor early decisions. I'm aware of it but rewriting it does not worth it.*
 
 After the first attempt I switched completely to the Beta-TC-VAE models. Andrew Khizhnyak provided me with additional \~4000 data points total of \~10000 now. I re-split the database into learn part and test part as 7:3.
 
