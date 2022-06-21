@@ -1,21 +1,7 @@
 Applying VAE and DGM families to JATS database in PyTorch
 =========================================================
 
-To run:
-
-* [Install work environment via conda](https://github.com/kiwi0fruit/pyappshare/tree/master/template_env)
-* [Setup mypy and pylint linters in Visual Studio Code and PyCharm](./README_SETUP_LINTERS.md)
-* Open this folder in Visual Studio Code, open and run "main.py" in Data Science mode via
-  [Python extension for Visual Studio Code](https://marketplace.visualstudio.com/items?itemName=ms-python.python).
-
-This would have worked if I published SOLTI database together with this repo. But currently it's not possible.
-But if you are interested researcher you can contact me here on GitHub and [Andrew Khizhnyak](https://vk.com/hizhnjak) for permission.
-
-I forked some repos, made them work together, fixed bugs when necessary and added types annotations:
-
-* [beta-tcvae](https://github.com/rtqichen/beta-tcvae)
-* [normalizing-flows](https://github.com/tonyduan/normalizing-flows) and [BNAF](https://github.com/nicola-decao/BNAF)
-* [semi-supervised-pytorch](https://github.com/wohlert/semi-supervised-pytorch)
+SOLTI database is not published together with this repo. But if you are interested researcher you can contact me here on GitHub and [Andrew Khizhnyak](https://vk.com/hizhnjak) for permission.
 
 
 First models (previous version)
@@ -66,7 +52,7 @@ At some point I also played with normalizing flows added to VAE but abandonded i
 Second unfinished model (current version)
 ----------------------------------------------
 
-*In some places the code is very suboptimal because of my poor early decisions. I'm aware of it but rewriting it does not worth it.*
+*Current version is 0.3.\* that is a rewrite of the 0.2 version.*
 
 After the first attempt I switched completely to the Beta-TC-VAE models. Andrew Khizhnyak provided me with additional \~4000 data points total of \~10000 now. I re-split the database into learn part and test part as 7:3.
 
@@ -90,3 +76,4 @@ Mappings:
 8 dim [FZA4] *(SubDecoder)*=>  
 12 dim [Khizhnyak axes] *(Decoder)*=>  
 160 dim [questionnaire]
+
