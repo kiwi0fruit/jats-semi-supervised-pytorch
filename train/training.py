@@ -39,20 +39,22 @@ X_EXT_D = 4
 LAT_D = 8
 SUB_D = 12
 
-MAXEPOCHS = 3001  # 350  # 1500
+MAXEPOCHS = 3000  # 350  # 1500  # 3000  # 3001
 OFFSET_EP = 0
 REAL_MAX_EP = True
 
 if X_EXT_D != len(EXTRA_QUEST) or X_D != MAIN_QUEST_N: raise RuntimeError('Inconsistent constants.')
 
 version: Opt[str]
-name, version = DEFAULTNAME, None
+save: Opt[str]
+name, version, save = DEFAULTNAME, None, None
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", default=str(name))
     parser.add_argument("--ver", default=version)
+    parser.add_argument("--save", default=save)
     args = parser.parse_args()
-    name, version = args.name, args.ver
+    name, version, save = args.name, args.ver, args.save
 
 
 parent_dir = path.dirname(path.dirname(path.abspath(__file__)))
@@ -413,14 +415,14 @@ class LightVAE(LightningModule2):
 
 
 autoencoder = LightVAE(offset_step=183 * OFFSET_EP)
-trainer_ = pl.Trainer(max_epochs=maxepochs, logger=logger, check_val_every_n_epoch=5, callbacks=[
-    plot_callback, git_dir_sha,
-    ModelCheckpoint(every_n_epochs=10, save_top_k=-1),
-])
+trainer_ = pl.Trainer(max_epochs=maxepochs, logger=logger, check_val_every_n_epoch=5 if save is None else 1,
+                      callbacks=[plot_callback, git_dir_sha,
+                                 ModelCheckpoint(every_n_epochs=10 if save is None else 1, save_top_k=-1)
+                                 ])
 
 
 if __name__ == '__main__':
-    trainer_.fit(autoencoder, train_loaders, test_loader, ckpt_path=checkpoint_path)
+    trainer_.fit(autoencoder, train_loaders, test_loader, ckpt_path=checkpoint_path if save is None else save)
     if not autoencoder.successful_run:
         raise RuntimeError('Unsuccessful. Skipping this train run.')
     raise RuntimeError('Force skip all train runs.')

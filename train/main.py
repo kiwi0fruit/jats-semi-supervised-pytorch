@@ -9,6 +9,9 @@ from pathlib import Path
 #   with successful or good enough to try runs copied from ../train_log_search_model
 #   (Placing "skip" file into the directory would skip it).
 #
+# You can also directly run training.py with --save filepath provided to
+# save a model without history.
+#
 # Tensorboard info: Don't start from CWD or parent, use for example ~
 # > conda activate nn
 # > tensorboard --logdir <abs-path-to-log-dir>
