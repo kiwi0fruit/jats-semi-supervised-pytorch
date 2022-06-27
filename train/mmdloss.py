@@ -51,3 +51,7 @@ class MMDNormalLoss(Module):
     def extra_repr(self) -> str:
         return f'min_mmd_batch_size={self.batch_size}, ' + 'mu={:.3f}, sigma={:.3f}'.format(
             self.mu[0].item(), self.log_sigma.exp()[0].item())
+
+
+def mmd_sym_swap(z: Tensor) -> Tensor:
+    return mmd(z, -z[:, tr.randperm(z.shape[1])])

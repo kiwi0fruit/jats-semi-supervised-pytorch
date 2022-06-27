@@ -12,6 +12,7 @@ def probs_temper(probs: Tensor) -> Tensor:
     probs_[masks[4 - 1] | masks[8 - 1] | masks[12 - 1] | masks[16 - 1]] = 3
     return probs_
 
+
 def probs_quadraclub(probs: Tensor) -> Tensor:
     """ (NTL, SFL, STC, NFC, SFC, NTC, NFL, STL) """
     probs_ = probs.clone()
@@ -26,15 +27,18 @@ def probs_quadraclub(probs: Tensor) -> Tensor:
     probs_[masks[15 - 1] | masks[16 - 1]] = 7
     return probs_
 
+
 def expand_quadraclub(probs: Tensor) -> Tensor:
     """ (NTL, SFL, STC, NFC, SFC, NTC, NFL, STL) """
     n, m = probs.shape
     return probs.view(n, m, 1).expand(n, m, 2).reshape(n, m * 2)
 
+
 def expand_temper(probs: Tensor) -> Tensor:
     """ (EP/-IR, IJ/+IR, IP/-ER, EJ/+ER) """
     n, m = probs.shape
     return probs.view(n, 1, m).expand(n, 4, m).reshape(n, m * 4)
+
 
 def expand_temper_to_stat_dyn(probs: Tensor) -> Tensor:
     """ (EP/-IR, IJ/+IR, IP/-ER, EJ/+ER) """

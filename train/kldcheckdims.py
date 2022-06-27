@@ -7,7 +7,7 @@ class CheckKLDDims(Module):
     def __init__(self, switch_from_min_to_max_thr=False, thr: float = 0, subset: Tuple[int, ...] = (),
                  check_interv: Tuple[int, int] = ()):
         super(CheckKLDDims, self).__init__()
-        self.thr = thr  # 714 had 0.19 but 0.15 was also successfully tried
+        self.thr = thr
         self.subset = subset
         self.check_interv = check_interv
         # if check_interv[0] > check_interv[1]: raise ValueError

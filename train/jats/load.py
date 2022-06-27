@@ -89,7 +89,7 @@ def get_labeled_mask(df: DataFrame) -> Array:
     return df['smart_coincide'].values > 0
 
 
-def get_loader(df: DataFrame, mode: str, batch_size: int, num_workers: int = 0) -> DataLoader:
+def get_loader(df: DataFrame, mode: str, batch_size: int, num_workers: int = 0, verbose=False) -> DataLoader:
     """
     Returns a loader of the output format:
 
@@ -100,23 +100,26 @@ def get_loader(df: DataFrame, mode: str, batch_size: int, num_workers: int = 0) 
     """
     if mode not in ('unlbl', 'lbl', 'both', 'plot'): raise ValueError
 
+    def get_(x_: Array, verbose_=verbose) -> Tuple[Tensor, ...]:
+        return (Tensor(x_).to(dtype=tr.long),) if verbose_ else ()
+
     if mode is 'unlbl':
-        _, passthr, x, e_ext, _, weights, _ = get_data(df)
-        dataset = TensorDataset(Tensor(x), Tensor(e_ext), Tensor(passthr))
+        ids, passthr, x, e_ext, _, weights, wtarget = get_data(df)
+        dataset = TensorDataset(Tensor(x), Tensor(e_ext), Tensor(passthr), *get_(ids), *get_(wtarget))
         sampler = WeightedRandomSampler(weights=weights.astype(np.float64),
                                         num_samples=len(x))
         return DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=num_workers)
 
     if mode == 'lbl':
-        _, passthr, x, e_ext, target, weights, _ = get_data(df[get_labeled_mask(df)])
+        ids, passthr, x, e_ext, target, weights, wtarget = get_data(df[get_labeled_mask(df)])
         dataset = TensorDataset(Tensor(x), Tensor(e_ext),
-                                Tensor(target).to(dtype=tr.long), Tensor(passthr))
+                                Tensor(target).to(dtype=tr.long), Tensor(passthr), *get_(ids), *get_(wtarget))
         sampler = WeightedRandomSampler(weights=weights.astype(np.float64),
                                         num_samples=len(x))
         return DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=num_workers)
 
     if mode == 'both':
-        _, passthr, x, e_ext, target, weights, _ = get_data(df)
+        ids, passthr, x, e_ext, target, weights, wtarget = get_data(df)
         weights_lbl = np.copy(weights)
         mask_lbl = get_labeled_mask(df)
         weights_lbl[mask_lbl] = get_data(df[mask_lbl])[5]
@@ -125,12 +128,57 @@ def get_loader(df: DataFrame, mode: str, batch_size: int, num_workers: int = 0) 
                                 Tensor(target).to(dtype=tr.long), Tensor(passthr),
                                 Tensor(weights.astype(np.float64)),
                                 Tensor(weights_lbl.astype(np.float64)),
-                                Tensor(mask_lbl).to(dtype=tr.bool))
+                                Tensor(mask_lbl).to(dtype=tr.bool),
+                                *get_(ids), *get_(wtarget))
         return DataLoader(dataset, batch_size=batch_size, num_workers=num_workers)
 
     if mode == 'plot':
-        _, passthr, x, e_ext, _, weights, _ = get_data(df[get_labeled_mask(df)])
-        dataset = TensorDataset(Tensor(x), Tensor(e_ext), Tensor(passthr))
+        ids, passthr, x, e_ext, _, weights, wtarget = get_data(df[get_labeled_mask(df)])
+        dataset = TensorDataset(Tensor(x), Tensor(e_ext), Tensor(passthr), *get_(ids), *get_(wtarget))
         sampler = WeightedRandomSampler(weights=weights.astype(np.float64),
                                         num_samples=len(x))
         return DataLoader(dataset, batch_size=batch_size, sampler=sampler)
+
+
+def test_loader(df_len: int, loader_verbose: DataLoader):
+    """
+    :param df_len: len(df) expected.
+    :param loader_verbose: get_loader(df, 'unlbl', BATCH_SIZE, num_workers=NUM_WORKERS, verbose=True) expected.
+    :return:
+    """
+    ids_, types_ = [], []
+    for smpl in loader_verbose:
+        id_i, t_i = smpl[-2], smpl[-1]
+        ids_.append(id_i.view(-1))
+        types_.append(t_i.view(-1))
+
+    ids = tr.cat(ids_).numpy()
+    uni, counts = np.unique(ids, return_counts=True)
+    print(df_len, len(ids), len(uni), list(reversed(sorted(counts)))[:100])
+    types = tr.cat(types_).numpy()
+    uni, counts = np.unique(types, return_counts=True)
+    print(df_len, counts)
+
+    for smpl in loader_verbose:
+        id_i, t_i = smpl[-2], smpl[-1]
+        ids_.append(id_i.view(-1))
+        types_.append(t_i.view(-1))
+
+    ids = tr.cat(ids_).numpy()
+    uni, counts = np.unique(ids, return_counts=True)
+    print(df_len, len(ids), len(uni), list(reversed(sorted(counts)))[:100])
+    types = tr.cat(types_).numpy()
+    uni, counts = np.unique(types, return_counts=True)
+    print(df_len, counts)
+
+    for smpl in loader_verbose:
+        id_i, t_i = smpl[-2], smpl[-1]
+        ids_.append(id_i.view(-1))
+        types_.append(t_i.view(-1))
+
+    ids = tr.cat(ids_).numpy()
+    uni, counts = np.unique(ids, return_counts=True)
+    print(df_len, len(ids), len(uni), list(reversed(sorted(counts)))[:100])
+    types = tr.cat(types_).numpy()
+    uni, counts = np.unique(types, return_counts=True)
+    print(df_len, counts)

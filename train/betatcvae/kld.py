@@ -204,8 +204,8 @@ class KLDTCLoss(BetaTCVAEModKLDLoss):
     def extra_repr(self) -> str:
         return f'dataset_size={self.dataset_size}'
 
-    # def kld(self, z: Tensor, *qz_params: Tensor) -> Tensor:
-    #     n = z.shape[0]  # batch_size
-    #     logqz_x = self.q_dist(z, *qz_params).view(n, -1).sum(dim=1)
-    #     logpz = self.prior_dist(z).view(n, -1).sum(dim=1)
-    #     return logqz_x - logpz
+    def kld(self, z: Tensor, *qz_params: Tensor) -> Tensor:
+        n = z.shape[0]  # batch_size
+        logqz_x = self.q_dist(z, *qz_params).view(n, -1).sum(dim=1)
+        logpz = self.prior_dist(z).view(n, -1).sum(dim=1)
+        return logqz_x - logpz

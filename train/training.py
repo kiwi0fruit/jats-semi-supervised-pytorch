@@ -2,6 +2,7 @@ from typing import Optional as Opt, Tuple
 from os import path
 from os.path import join
 import argparse
+# import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 import torch as tr
@@ -10,23 +11,21 @@ from torch import nn, Tensor
 # from torch.optim.lr_scheduler import MultiStepLR
 import pytorch_lightning as pl
 from pytorch_lightning.loggers.tensorboard import TensorBoardLogger
-# from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint
 from torchmetrics import Accuracy, MeanMetric, MaxMetric, SumMetric, CatMetric
 
-from lightningfix import get_last_checkpoint, GitDirsSHACallback, DeterministicWarmup, tensor_to_dict, LightningModule2
+from lightningfix import (get_last_checkpoint, GitDirsSHACallback, DeterministicWarmup, tensor_to_dict,
+                          LightningModule2)
 from mmdloss import MMDNormalLoss
 from betatcvae.kld import Distrib, StdNormal, KLDTCLoss
-from jatsregularizertested import JATSRegularizerUntested  # , JATSRegularizerTested
+from jatsregularizer import JATSRegularizer
 from kldcheckdims import CheckKLDDims
 from jats.load import get_target_stratify, get_loader, MAIN_QUEST_N, EXTRA_QUEST
 from jats.callbacks import PlotCallback
 from jats.utils import probs_temper, probs_quadraclub, expand_quadraclub, expand_temper, expand_temper_to_stat_dyn
 
-# README: run ./main.py script in order to do first part of the training.
-
-# Tensorboard info: Don't start from CWD or parent, use for example ~
-# > conda activate nn
-# > tensorboard --logdir <abs-path-to-log-dir>
+# README:
+# run ./main.py script and read it's README
 
 DEFAULTNAME = 'train_log'
 NUM_WORKERS = 4
@@ -40,10 +39,8 @@ X_EXT_D = 4
 LAT_D = 8
 SUB_D = 12
 
-# K = 27  # 6; 11; 27
-MAXEPOCHS = 100 + 3000  # the first part: 100; + 3000
-# the first part: 220 + 20 * K; + 3000
-OFFSET_EP = 0  # 0
+MAXEPOCHS = 3001  # 350  # 1500
+OFFSET_EP = 0
 REAL_MAX_EP = True
 
 if X_EXT_D != len(EXTRA_QUEST) or X_D != MAIN_QUEST_N: raise RuntimeError('Inconsistent constants.')
@@ -84,15 +81,13 @@ test_loader = get_loader(df_test, 'both', BATCH_SIZE, num_workers=NUM_WORKERS)
 class PlotCallback2(PlotCallback):
     def plot(self, trainer, pl_module):
         if isinstance(pl_module, LightningModule2):
-            if (not pl_module.successful_run) and (not self.verbose):
-                return
             if pl_module.dummy_validation:
                 return
         super(PlotCallback2, self).plot(trainer, pl_module)
 
 
 plot_callback = PlotCallback2(jats_df, join(preprocess_db, 'ids_interesting.ast'),
-                              plot_every_n_epoch=20, verbose=True)
+                              plot_every_n_epoch=20)
 git_dir_sha = GitDirsSHACallback(preprocess_db)
 
 
@@ -110,30 +105,31 @@ class DoubleVAESampler(nn.Module):
 
 # noinspection PyAbstractClass
 class LightVAE(LightningModule2):
-    def __init__(self, learning_rate=1e-3, offset_step: int = 0):  # 1e-4  max_epochs: int,
+    def __init__(self, learning_rate=1e-4, offset_step: int = 0):
         super().__init__()
         self.learning_rate = learning_rate
-        # self.lr_warmup = False
 
-        # originally all 48 were 32; all 96 were 64
-        self.encoder = nn.Sequential(nn.Linear(X_D + X_EXT_D, 96), nn.SELU(),
-                                     nn.Linear(96, 48), nn.SELU(),
-                                     nn.Linear(48, LAT_D * 3),
+        self.encoder = nn.Sequential(nn.Linear(X_D + X_EXT_D, 64), nn.SELU(),
+                                     nn.Linear(64, 32), nn.SELU(),
+                                     nn.Linear(32, LAT_D * 3),
                                      DoubleVAESampler(StdNormal()))
-        self.sub_decoder = nn.Sequential(nn.Linear(LAT_D, 48), nn.SELU(),
-                                         nn.Linear(48, 48), nn.SELU(),
-                                         nn.Linear(48, SUB_D))
-        self.decoder = nn.Sequential(nn.Linear(SUB_D, 48), nn.SELU(),
-                                     nn.Linear(48, 96), nn.SELU(),
-                                     nn.Linear(96, X_D))
+        self.sub_decoder = nn.Sequential(nn.Linear(LAT_D, 32), nn.SELU(),
+                                         nn.Linear(32, 32), nn.SELU(),
+                                         nn.Linear(32, SUB_D))
+        self.decoder = nn.Sequential(nn.Linear(SUB_D, 32), nn.SELU(),
+                                     nn.Linear(32, 64), nn.SELU(),
+                                     nn.Linear(64, X_D))
+        self.decoder_beta = nn.Sequential(nn.Linear(SUB_D, 32), nn.SELU(),
+                                          nn.Linear(32, 64), nn.SELU(),
+                                          nn.Linear(64, X_D))
 
-        self.cls_pos_shifts = nn.Parameter(tr.zeros(LAT_D + SUB_D) - 0.01)
-        self.cls_neg_shifts = nn.Parameter(tr.zeros(LAT_D + SUB_D) + 0.01)
-        self.selu = nn.SELU()
-        self.classifier_logprobs = nn.Sequential(nn.Linear(PSS_D + (LAT_D + SUB_D) * 3, 16), nn.LogSoftmax(dim=1))
+        clsdim = LAT_D * 2 + SUB_D
+        self.cls_shifts = nn.Parameter(tr.zeros(clsdim * 2).view(2, clsdim) - 0.01)
+        self.cls_logits = nn.Linear(PSS_D + clsdim * 3, 16)
         # nn.Sequential(nn.Linear(, 16), nn.LeakyReLU(), nn.Linear(16, 16), nn.LogSoftmax(dim=1))
+        self.cls_linear = nn.Linear(PSS_D + clsdim * 3, PSS_D + clsdim * 3)
 
-        self.jatsregularizer = JATSRegularizerUntested()
+        self.jatsregularizer = JATSRegularizer()
         self.nll_logprobs = nn.NLLLoss(reduction='none')
         self.bce_logits = nn.BCEWithLogitsLoss(reduction='none')
         self.mse_probs = nn.MSELoss(reduction='none')
@@ -165,109 +161,66 @@ class LightVAE(LightningModule2):
         # after old-840-ep ~ mse 0.142 / bce 86.7
         # TC = 0.48 @ 640ep; 0.33 @ 840ep
         # @640ep NLL_t=88.07 raises max d0.5 then goes down.
+        # MSE_test=0.1417 was right before the last rho switch.
 
-        # k = 57.1875
-        # def s(x): return round(x * 57.1875)
-        # def a(x): return x + 80  # 80=>25  160=>50
-        # x + 96 + 32
-        # def b(x): return a(x) - 320  # 640=>200  d64=>d20
-        # a(x) - 96 + 32 + 64 * K
-        # def c(x): return b(x) + 120  # 760=>237.5  840=>262.5
-        # b(x) + 120 * 4 + scl(200) / k
-        # def d(x): return c(x)  # 1040=>325  1120=>350
-        # c(x) + scl(200) / k
-        def scl(x): return round(x * 183)
+        def scl(x): return round(x * 183) + offset_step
+        def inv_scl(scl_x): return scl_x // 183
         k25, k50 = scl(25), scl(50)
-        k100, k175 = scl(100), scl(175)
-        k200 = scl(200)
+        k200, k300 = scl(200), scl(300)
+        k500, k4000 = scl(500), scl(4000)
+        k100, k1000 = scl(100), scl(1000)
+        # k3000 = scl(3000)
 
         self.warmup = DeterministicWarmup(
             1, offset_step,
-            # dict(alpha=[[0, 0.005], [s(a(80)), 0.5], [s(d(1120)), 0.5]]),  # orig
-            # dict(alpha=[[0, 0.005], [s(a(80)), 0.25], [s(d(1120)), 0.25]]),
-            # dict(beta=[[0, 0.005], [s(a(80)), 1], [s(d(1120)), 1]]),  # orig
-            dict(beta=[[0, 0.005], [k50, 0.5], [k200, 0.5]]),
-            dict(gamma=[[0, 0], [k50, 7], [k200, 7]]),
-            dict(epsilon=[[0, 0.75], [k100, 0.75], [k175, 0.33], [k200, 0.33]]),  # orig
-            # dict(epsilon=[[0, 0.75], [s(b(640)), 0.75], [s(c(760)), 0.2], [s(d(1120)), 0.2]]),
-            dict(eta=[[0, 21], [k50, 7], [k100, 7], [k175, 3], [k200, 3]]),  # should be @ (1-mu)
-            # dict(eta=[[0, 30], [s(a(80)), 10], [s(b(640)), 10], [s(c(760)), 5], [s(d(1120)), 5]]),  # was @ (1-mu)/2
-            dict(mu=[[0, 0.57], [k100, 0.57], [scl(175), 0.33], [k200, 0.33]]),  # should be @ (1-mu)
-            # dict(mu=[[0, 0.4], [s(b(640)), 0.4], [s(c(760)), 0.2], [s(d(1120)), 0.2]]),  # was @ (1-mu)/2 bug
-            # dict(rho=[[0, 3], [s(b(640)), 3], [s(b(641)), 2], [s(d(1040)), 2], [s(d(1041)), 1], [s(d(1120)), 1]]),
-            dict(rho=[[0, 4], [k25, 4], [k25 + 1, 3], [k100, 3], [k100 + 1, 2], [k175, 2],
-                      [k175 + 1, 1], [k200, 1]]),
-            dict(omega=[[0, 2], [k100, 2], [k175, 4], [k200, 4]]),
+            dict(alpha=[[0, 0.005], [k50, 0.25], [k100, 0.5], [k4000, 0.5]]),
+            dict(beta=[[0, 0.005], [k50, 0.25], [k100, 1], [k4000, 1]]),
+            dict(gamma=[[0, 0], [k50, 7], [k4000, 7]]),
+            dict(delta=[[0, 0], [k4000, 0]]),  # [k3000, 0], [k3000 + 1, 1], [k4000, 1]
+            dict(epsilon=[[0, 0.85], [k50, 0.85], [k100, 0.75], [k200, 0.75], [k300, 0.1], [k4000, 0.1]]),
+            dict(eta=[[0, 21], [k50, 7], [k200, 7], [k300, 3], [k4000, 3]]),
+            dict(mu=[[0, 0.57], [k200, 0.57], [k300, 0.33], [k4000, 0.33]]),
+            dict(rho=[[0, 5], [k25, 5], [k25 + 1, 4], [k200, 4], [k200 + 1, 3], [k500, 3], [k500 + 1, 2], [k4000, 2]]),
+            dict(omega=[[0, 2], [k200, 2], [k300, 4], [k4000, 4]]),
         )
-        # self.max1 = 540
 
-        # untested version:
+        # Untested version:
         # -----------------
-        # sh = offset_step
-        self.check_kld_dims_max = nn.ModuleList([
-            CheckKLDDims(True, thr=1.30, subset=(1,), check_interv=(4, 5)),
-            CheckKLDDims(True, thr=0.55, subset=(1,), check_interv=(35, 100)),
-            CheckKLDDims(True, thr=0.55, subset=(4,), check_interv=(65, 100)),
+        check_kld_dims_delta_min = nn.ModuleList([
+            CheckKLDDims(thr=0.001, subset=(0, 1, 4, 5), check_interv=(5 - 1, 1000)),
+            CheckKLDDims(thr=0.001, subset=(2, 3), check_interv=(50 - 1, 1000)),
         ])
-        self.check_kld_dims_min = nn.ModuleList([
-            CheckKLDDims(thr=1.20, subset=(5,), check_interv=(4, 5)),
-            CheckKLDDims(thr=0.50, subset=(0, 2, 3, 5, 6), check_interv=(65, 100)),
-            # CheckKLDDims(thr=0.32, subset=(0, 2, 6), check_interv=(100, 140),
-            # CheckKLDDims(thr=0.42, subset=(0, 2, 6), check_interv=(140, max_epochs)),
-            # CheckKLDDims(thr=0.42, subset=(3,), check_interv=(140, max_epochs)),
-            # CheckKLDDims(thr=0.23, subset=(0, 1, 2, 3, 4, 5, 6), check_interv=(140, max_epochs)),
-            # CheckKLDDims(thr=0.20, subset=(0, 1, 2, 3, 4, 5, 6), check_interv=(220 + 20 * K + sh, max_epochs)),
-            # CheckKLDDims(thr=0.14, subset=(7,), check_interv=(220 + 20 * K + sh, max_epochs)),  # 220
+        check_kld_dims_max = nn.ModuleList([
+            CheckKLDDims(True, thr=1.30, subset=(1, 4), check_interv=(5 - 1, 5)),
+            CheckKLDDims(True, thr=1.10, subset=(1, 4), check_interv=(10 - 1, 10)),
+            CheckKLDDims(True, thr=0.55, subset=(1, 4), check_interv=(25 - 1, 1000)),
         ])
+        check_kld_dims_min = nn.ModuleList([
+            CheckKLDDims(thr=0.42, subset=(0, 2, 3, 5, 6), check_interv=(80 - 1, inv_scl(k200))),
+            CheckKLDDims(thr=0.20, subset=(0, 1, 2, 3, 4, 5, 6), check_interv=(inv_scl(k300) - 1, 1000)),
+            CheckKLDDims(thr=0.14, subset=(7,), check_interv=(inv_scl(k300) + 100 - 1, 1000)),
+        ])
+        self.check_kld_dims = nn.ModuleList([check_kld_dims_delta_min, check_kld_dims_max, check_kld_dims_min])
 
-        # tested version:
-        # ---------------
-        # self.check_kld_dims_0 = CheckKLDDims(thr=0.005, subset=(7,), check_interv=(o(a(160)), max_epochs))
-        # self.check_kld_dims_0_i = 0
+    @staticmethod
+    def get_kld_dims_args(kldvec: Tensor, kldvec_beta: Tensor):
+        kld_greater = kldvec_beta.view(1, -1)[:, (5, 6)].view(-1)
+        dkld = tr.cat((kld_greater - kldvec_beta[1], kld_greater - kldvec_beta[4], kld_greater - kldvec_beta[7]))
+        return (dkld,), (kldvec_beta,), (kldvec, kldvec_beta)
 
-        # self.check_kld_dims_delta_max = nn.ModuleList([
-        #     CheckKLDDims(True, thr=0.07, subset=(7,), check_interv=(o(a(100)), max_epochs))
-        # ])
-        # self.check_kld_dims_max = nn.ModuleList([
-        #     CheckKLDDims(True, thr=0.5, subset=(1,), check_interv=(o(a(200)), max_epochs)),
-        #     CheckKLDDims(True, thr=0.55, subset=(4,), check_interv=(o(a(200)), max_epochs)),
-        # ])
-        # self.check_kld_dims_min = nn.ModuleList([
-        #     CheckKLDDims(thr=0.32, subset=(0, 2, 5, 6), check_interv=(o(a(200)), o(a(320)))),
-        #     CheckKLDDims(thr=0.42, subset=(0, 2, 5, 6), check_interv=(o(a(320)), max_epochs)),
-        #     CheckKLDDims(thr=0.42, subset=(3,), check_interv=(o(a(320)), max_epochs)),
-        #     CheckKLDDims(thr=0.23, subset=(0, 1, 2, 3, 4, 5, 6), check_interv=(o(a(320)), o(b(640)))),
-        #     CheckKLDDims(thr=0.25, subset=(0, 1, 2, 3, 4, 5, 6), check_interv=(o(b(640)), max_epochs)),
-        #     CheckKLDDims(thr=0.15, subset=(7,), check_interv=(o(b(640)), max_epochs)),
-        # ])
-
-    # def classify_logprobs__(self, pss, z, subdec_z):
-    #     z_subdec_z = tr.cat([z, subdec_z], dim=1)
-    #     return self.classifier_logprobs(tr.cat([
-    #         pss,
-    #         z_subdec_z,
-    #         self.selu(z_subdec_z - self.cls_pos_shifts),
-    #         self.selu(-z_subdec_z - self.cls_neg_shifts)
-    #     ], dim=1))
-    #
-    # def nll_classify_logprobs__(self, pss, z, subdec_z, y) -> Tensor:
-    #     return self.nll_logprobs(self.classify_logprobs__(pss, z, subdec_z), y)
-    #
-    # def classify_probs__(self, pss, z, subdec_z) -> Tensor:
-    #     return tr.exp(self.classify_logprobs__(pss, z, subdec_z))
+    def load_state_dict(self, state_dict, strict=False):
+        return super(LightVAE, self).load_state_dict(state_dict, strict=strict)
 
     def classify_logprobs(self, pss, z, subdec_z) -> Tuple[Tensor, Tensor]:
-        linear = self.classifier_logprobs[0]
-        logsoftmax = self.classifier_logprobs[1]
-
-        z_subdec_z = tr.cat([z, subdec_z], dim=1)
-        logits = linear(tr.cat([
+        z_z_rot_subdec_z = tr.cat([z, self.jatsregularizer.cat_rot(z), subdec_z], dim=1)
+        # expects 1 + (8 + 12) * 3; we have 1 + (8 + 6) * 3
+        logits = self.cls_logits(tr.cat([
             pss,
-            z_subdec_z,
-            self.selu(z_subdec_z - self.cls_pos_shifts),
-            self.selu(-z_subdec_z - self.cls_neg_shifts)
+            z_z_rot_subdec_z,
+            tr.selu(z_z_rot_subdec_z - self.cls_shifts[0]),
+            tr.selu(-z_z_rot_subdec_z - self.cls_shifts[1])
         ], dim=1))[:, :12]
-        return logsoftmax(logits[:, :8]), logsoftmax(logits[:, 8:])
+        return tr.log_softmax((logits[:, :8]), dim=1), tr.log_softmax((logits[:, 8:]), dim=1)
 
     def nll_classify_logprobs(self, pss, z, subdec_z, y) -> Tensor:
         logprobs8, logprobs4 = self.classify_logprobs(pss, z, subdec_z)
@@ -281,15 +234,22 @@ class LightVAE(LightningModule2):
     def sub_decode(self, *z: Tensor) -> Tensor:
         return self.sub_decoder(z[0])
 
-    def decode__sub_decode(self, *z: Tensor) -> Tensor:
+    def decode_sub_decode(self, *z: Tensor) -> Tensor:
         return self.decoder(self.sub_decoder(z[0]))
+
+    def decode_beta_sub_decode(self, *z: Tensor) -> Tensor:
+        return self.decoder_beta(self.sub_decoder(z[0]))
 
     # def sub_decode(self, *z: Tensor) -> Tensor:
     #     return self.sub_decoder(tr.cat(z, dim=1))
     #
-    # def decode__sub_decode(self, *z: Tensor) -> Tensor:
+    # def decode_sub_decode(self, *z: Tensor) -> Tensor:
     #     subdec_z = self.sub_decode(*z)
     #     return self.decoder(tr.cat((subdec_z,) + z[1:], dim=1))
+    #
+    # def decode_beta_sub_decode(self, *z: Tensor) -> Tensor:
+    #     subdec_z = self.sub_decode(*z)
+    #     return self.decoder_beta(tr.cat((subdec_z,) + z[1:], dim=1))
 
     def forward(self, x: Tensor, x_ext: Tensor, passth: Tensor):
         """
@@ -309,7 +269,7 @@ class LightVAE(LightningModule2):
 
         # Setting warmup coefficients
         # =================
-        (beta, gamma, epsilon,  # (alpha,
+        (alpha, beta, gamma, delta, epsilon,
          eta, mu, rho, omega), warmup_log = self.warmup(self.global_step)
         self.logger.log_metrics(warmup_log, step=self.global_step)
 
@@ -321,8 +281,8 @@ class LightVAE(LightningModule2):
         # x.sum(dim=1).mean() == x.mean(dim=0).sum() == x.sum() / n
         mu1, log_sigma, log_sigma_beta, z1, z1_beta = self.encoder(tr.cat([x1, x1ext], dim=1))
         subdec_mu1 = self.sub_decode(mu1, pss1)
-        bce = self.bce_logits(self.decode__sub_decode(z1, pss1), x1).sum() / n1
-        bce_b = self.bce_logits(self.decode__sub_decode(z1_beta, pss1), x1).sum() / n1
+        bce = self.bce_logits(self.decode_sub_decode(z1, pss1), x1).sum() / n1
+        bce_b = self.bce_logits(self.decode_beta_sub_decode(z1_beta, pss1), x1).sum() / n1
 
         kld = self.kld_tc.q_dist.kld((mu1, log_sigma)).sum() / n1
         # kld = self.kld_tc.kld(z1, mu1, log_sigma).mean()
@@ -335,9 +295,8 @@ class LightVAE(LightningModule2):
         self.metr_tc(tc_b)
         self.metr_tc_max(tc_b_unrdcd.max() if (n1 == self.mmd.batch_size) else tc_b)
 
-        mmd = self.mmd(mu1)
+        mmd_mu1 = self.mmd(mu1)
         trim_loss = (tr.relu(mu1 - 2.5) + tr.relu(-mu1 - 2.5)).sum() / n1
-        # trim_loss was *200 for each of twins. But actually they are the same hence 400
         trim_loss_subdec = (tr.relu(subdec_mu1 - 3) +  # #          not neg. thr. at right
                             tr.relu(-subdec_mu1 - 3)).sum() / n1  # not pos. thr. at left
 
@@ -350,28 +309,30 @@ class LightVAE(LightningModule2):
         jats_z_b = self.jatsregularizer(z2_beta, self.sub_decode(z2_beta, pss2), y2) / n2
         jats_mu_b = self.jatsregularizer(mu2, self.sub_decode(mu2, pss2), y2) / n2
 
-        nll = self.nll_classify_logprobs(pss2, z2.detach(), subdec_z2.detach(), y2).sum() / n2
+        if delta < 0.5:
+            nll = self.nll_classify_logprobs(pss2, z2.detach(), subdec_z2.detach(), y2).sum() / n2
+        else:
+            nll = self.nll_classify_logprobs(pss2, z2, subdec_z2, y2).sum() / n2
 
-        # Only trim_loss coefficients are OK:
         # =================
         loss = (
-            (bce + kld * beta) * epsilon +
+            (bce + kld * alpha) * epsilon +
             (bce_b + kld_b * beta + tc_b * gamma) * (1 - epsilon) +
             trim_loss * 400 +  # was 200 + 200
             trim_loss_subdec * 200 +
-            mmd * 1000 +
-            (
-                jats_mu_b * mu + jats_z * (epsilon*(1 - mu)) + jats_z_b * ((1 - epsilon)*(1 - mu))
-            ) * eta +
-            nll
+            mmd_mu1 * 1000 +
+            (jats_mu_b * mu + (jats_z * epsilon + jats_z_b * (1 - epsilon)) * (1 - mu)
+             ) * eta +
+            nll * 0.01
         )
+        # trim_loss was *200 for each of twins. But actually they are the same hence 400
         if tr.isnan(loss).any():
             raise NotImplementedError('NaN spotted in the objective.')
 
         self.log("train_loss", loss)
         self.metr_loss(loss)
         with tr.no_grad():
-            xlogits_mu1 = self.decode__sub_decode(mu1, pss1)
+            xlogits_mu1 = self.decode_sub_decode(mu1, pss1)
             self.metr_bce_l(self.bce_logits(xlogits_mu1, x1).sum() / n1)
             self.metr_mse_l(self.mse_probs(tr.sigmoid(xlogits_mu1), x1).mean())
             self.metr_acc_l(self.classify_probs(pss2, mu2, self.sub_decode(mu2, pss2)), y2)
@@ -386,10 +347,10 @@ class LightVAE(LightningModule2):
         # Unlabelled data:
         mu1, log_sigma, log_sigma_beta, z1, z1_beta = self.encoder(tr.cat([x1, x1ext], dim=1))
 
-        bce_z1 = (self.bce_logits(self.decode__sub_decode(z1, pss1), x1).sum(dim=1) * w1).sum()
-        bce_z1_b = (self.bce_logits(self.decode__sub_decode(z1_beta, pss1), x1).sum(dim=1) * w1).sum()
+        bce_z1 = (self.bce_logits(self.decode_sub_decode(z1, pss1), x1).sum(dim=1) * w1).sum()
+        bce_z1_b = (self.bce_logits(self.decode_beta_sub_decode(z1_beta, pss1), x1).sum(dim=1) * w1).sum()
 
-        xlogits_mu1 = self.decode__sub_decode(mu1, pss1)
+        xlogits_mu1 = self.decode_sub_decode(mu1, pss1)
         self.metr_bce_mu_v((self.bce_logits(xlogits_mu1, x1).sum(dim=1) * w1).sum())
         self.metr_mse_v((self.mse_probs(tr.sigmoid(xlogits_mu1), x1).mean(dim=1) * w1).sum())
 
@@ -434,29 +395,10 @@ class LightVAE(LightningModule2):
 
         # self.log("cls_shifts", {**tensor_to_dict(self.cls_pos_shifts, 'p'),
         #                         **tensor_to_dict(self.cls_neg_shifts, 'n')})
-
-        # self.logg("kld_val", self.metr_kld, lambda m: tensor_to_dict(m.sum(dim=0)))
-        # self.logg("kld_beta_val", self.metr_kld_beta, lambda m: tensor_to_dict(m.sum(dim=0)))
         klvec = self.logg("kld_val", self.metr_kld, lambda m: tensor_to_dict(m.sum(dim=0))).sum(dim=0)
         klvec_b = self.logg("kld_beta_val", self.metr_kld_beta, lambda m: tensor_to_dict(m.sum(dim=0))).sum(dim=0)
-
-        # j = 0.
-        # if not self.check_kld_dims_0(self.current_epoch, klvec, klvec_b):
-        #     if not self.dummy_validation:
-        #         self.check_kld_dims_0_i += 1
-        #         if self.check_kld_dims_0_i >= 8:
-        #             self.log("kld_check_failed", j)
-        #             self.successful_run = False
-        #             self.trainer.should_stop = True
-        #             return
-        # elif not self.dummy_validation:
-        #     self.check_kld_dims_0_i = 0
-
-        # for checks, args_ in zip([self.check_kld_dims_delta_max, self.check_kld_dims_max, self.check_kld_dims_min],
-        #                          [(klvec_b - klvec,), (klvec_b,), (klvec, klvec_b)]):
         i = -1.
-        for checks, args_ in zip([self.check_kld_dims_max, self.check_kld_dims_min],
-                                 [(klvec_b,), (klvec, klvec_b)]):
+        for checks, args_ in zip(self.check_kld_dims, self.get_kld_dims_args(klvec, klvec_b)):
             for check in checks:
                 i += 1.
                 if not check(self.current_epoch, *args_):
@@ -468,25 +410,17 @@ class LightVAE(LightningModule2):
 
     def configure_optimizers(self):
         return tr.optim.Adam(self.parameters(), lr=self.learning_rate)
-        # if not self.lr_warmup:
-        #     return tr.optim.Adam(self.parameters(), lr=self.learning_rate * 0.1)
-        # optimizer = tr.optim.Adam(self.parameters(), lr=self.learning_rate)
-        # scheduler = MultiStepLR(optimizer, milestones=[self.max1], gamma=0.1)
-        # return [optimizer], [dict(
-        #     scheduler=scheduler,
-        #     interval='epoch',
-        #     frequency=1,
-        # )]
 
 
-autoencoder = LightVAE(offset_step=183 * OFFSET_EP)  # max_epochs=maxepochs,
+autoencoder = LightVAE(offset_step=183 * OFFSET_EP)
 trainer_ = pl.Trainer(max_epochs=maxepochs, logger=logger, check_val_every_n_epoch=5, callbacks=[
     plot_callback, git_dir_sha,
-    # ModelCheckpoint(every_n_epochs=10, save_top_k=-1),
+    ModelCheckpoint(every_n_epochs=10, save_top_k=-1),
 ])
 
 
 if __name__ == '__main__':
     trainer_.fit(autoencoder, train_loaders, test_loader, ckpt_path=checkpoint_path)
-    if not autoencoder.successful_run or (MAXEPOCHS < 3000):
+    if not autoencoder.successful_run:
         raise RuntimeError('Unsuccessful. Skipping this train run.')
+    raise RuntimeError('Force skip all train runs.')

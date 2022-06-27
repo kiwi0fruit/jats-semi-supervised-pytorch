@@ -113,7 +113,6 @@ def get_fa(x_val: Array, x_ext_val: Array, w_val: Opt[Array],
     for j, i in enumerate(n_factors_list):
         fa = FactorAnalyzer(n_factors=i, is_corr_matrix=True, method='ml',
                             rotation=(None, 'varimax', 'oblimax', 'quartimax', 'equamax')[0])
-        # rotation=('equamax', None)[1]
         fa.fit(w_sigma_mat)
         fa.mean_ = np.zeros(x_ext_lrn.shape[1])
         fa.std_ = fa.mean_ + 1.

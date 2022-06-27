@@ -3,12 +3,15 @@ from os.path import dirname, join, abspath, isfile
 import subprocess
 from pathlib import Path
 
+# README:
 # Mode #1: Simply run but make sure that ../train_log is empty
 # Mode #2: Simply run but make sure that ../train_log has logs
-#   with successful or good enough to try runs copied from
-#   ../train_log_search_model . Then set OFFSET_EP below to
-#   the last epoch from latest checkpoint + 1.
+#   with successful or good enough to try runs copied from ../train_log_search_model
 #   (Placing "skip" file into the directory would skip it).
+#
+# Tensorboard info: Don't start from CWD or parent, use for example ~
+# > conda activate nn
+# > tensorboard --logdir <abs-path-to-log-dir>
 
 MAX_ERROR = 1000
 

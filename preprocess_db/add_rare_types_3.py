@@ -5,7 +5,7 @@ import pandas as pd
 from pandas import DataFrame
 
 MISSING_TYPES: Tuple[int, ...] = tuple(range(1, 17))
-EXTRA_NO_SELF_TYPES = True
+EXTRA_NO_SELF_TYPES = False
 MALE_LABEL_SHIFT = 16  # `get_weight` function assumes this
 
 
@@ -139,12 +139,13 @@ def types_tal_good_mask(df: DataFrame,
 
 def smart_coincide_2(
         tal_profs: Array, types_self: Array, types_tal: Array, males: Array,
-        threshold: int = -80,  # was 90,
+        threshold: int = 95,  # was 90,
         thresholds_males: Tuple[Tuple[int, Tuple[int, ...]], ...] = (
-            (85, (4,)), (95, (3, 10, 16)), (-90, (12, 13))
+            # (85, (4,)), (95, (3, 10, 16)), (-90, (12, 13))
+            (85, (4,)),
         ),
         thresholds_females: Tuple[Tuple[int, Tuple[int, ...]], ...] = (
-            (95, (16,)),
+            # (95, (16,)),
         )) -> Array:
     return smart_coincide_1(tal_profs=tal_profs, types_self=types_self, types_tal=types_tal, males=males,
                             threshold=threshold,
